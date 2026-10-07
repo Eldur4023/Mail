@@ -3,7 +3,8 @@ Type=Application
 Name=Mail
 Comment=Correo de escritorio: varias cuentas en una bandeja
 Exec=mail-desktop
-Icon=mail-desktop
+# Ruta absoluta: con el nombre "mail-desktop", KDE cae al icono genérico "mail" de temas como Win11.
+Icon=/usr/share/icons/hicolor/256x256/apps/mail-desktop.png
 Terminal=false
 Categories=Network;Email;
 Keywords=correo;email;imap;
