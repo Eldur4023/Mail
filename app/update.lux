@@ -1,13 +1,13 @@
 # update.lux — actualizaciones desde GitHub, como Drive de escritorio.
-# deploy/install.sh deja en /opt/lux-mail de qué repositorio y commit se instaló; la
+# deploy/install.sh deja en /opt/mail-desktop de qué repositorio y commit se instaló; la
 # app compara ese commit con el de GitHub y, si hay cambios, lanza deploy/update.sh
 # (pull, compilar y `pkexec install.sh`) en segundo plano.
 
 fn string opt_dir():
-    return os.getenv("LUX_MAIL_OPT", "/opt/lux-mail")
+    return os.getenv("MAIL_OPT", "/opt/mail-desktop")
 
 fn string update_log():
-    return os.path_join(os.getenv("HOME", "/tmp"), ".cache/lux-mail-update.log")
+    return os.path_join(os.getenv("HOME", "/tmp"), ".cache/mail-update.log")
 
 fn string source_repo():
     if not os.path_exists(opt_dir() + "/source"):

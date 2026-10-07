@@ -988,7 +988,7 @@ $("#update-go").onclick = async () => {
     if (l.state === "running") return;
     clearInterval(poll);
     go.disabled = later.disabled = false;
-    if (l.state === "done") { go.dataset.done = "1"; go.textContent = "Reiniciar Lux Mail"; hint.textContent = "Actualizado. Reinicia la ventana para usar la versión nueva."; }
+    if (l.state === "done") { go.dataset.done = "1"; go.textContent = "Reiniciar Mail"; hint.textContent = "Actualizado. Reinicia la ventana para usar la versión nueva."; }
     else { go.textContent = "Reintentar"; hint.textContent = "No se pudo actualizar. Abajo está el motivo."; }
   }, 1500);
 };

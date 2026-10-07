@@ -31,7 +31,7 @@ post endpoint("/api/setup-window"):
             { "label": "Buscar", "action": "/menu/search", "accel": "<Control>f" }
         ]}
     ])
-    window.set_tray("./icon.png", "Lux Mail")
+    window.set_tray("./icon.png", "Mail")
     return status(204)
 
 post endpoint("/menu/quit"):
@@ -44,11 +44,11 @@ post endpoint("/menu/:accion", string accion):
 
 fn void notify_new(int added, string detail):
     if added > 0:
-        window.notify("Lux Mail", detail)
+        window.notify("Mail", detail)
 
 # Tras actualizar: abre la versión nueva y cierra esta. Sin redirigir, la app nueva
 # hereda nuestra salida y os.run esperaría hasta el timeout, y window.close() no llegaría.
 post endpoint("/api/restart"):
-    await os.run("setsid", ["-f", "sh", "-c", "exec > /dev/null 2>&1 < /dev/null; sleep 1; exec /usr/local/bin/lux-mail"])
+    await os.run("setsid", ["-f", "sh", "-c", "exec > /dev/null 2>&1 < /dev/null; sleep 1; exec /usr/local/bin/mail-desktop"])
     window.close()
     return { "ok": true }

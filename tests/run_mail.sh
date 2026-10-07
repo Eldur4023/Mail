@@ -18,7 +18,7 @@ cp -r app "$T/app"; rm -rf "$T/app/data"; cd "$T/app"
 # `lux` a secas no tiene el módulo window: fuera su import, su bloque y window.lux
 cp ../tests/window_stub.lux window.lux 2>/dev/null || cp "$OLDPWD/tests/window_stub.lux" window.lux
 sed -i '/^import window$/d; /^    window:$/,/^        icon /d' app.lux
-LUX_MAIL_OPT="$T/sin-instalar" PATH="$T/bin:$PATH" "$LUX" . --port $WEB >"$T/srv.log" 2>&1 & sleep 2
+MAIL_OPT="$T/sin-instalar" PATH="$T/bin:$PATH" "$LUX" . --port $WEB >"$T/srv.log" 2>&1 & sleep 2
 fail=0
 check() { if grep -qF -- "$2" <<<"$1"; then echo "ok   $3"; else echo "FAIL $3: wanted [$2]"; fail=1; fi; }
 acct() { curl -s -m 10 -XPOST localhost:$WEB/api/accounts -d "name=$1&email=$2&password=pw&color=%23$3&imap_host=127.0.0.1&imap_port=$IMAP&imap_tls=none&smtp_host=127.0.0.1&smtp_port=$SMTP&smtp_tls=none"; }

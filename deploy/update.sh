@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Actualiza Lux Mail desde GitHub. Lo lanza la propia app (botón «Actualizar»),
+# Actualiza Mail desde GitHub. Lo lanza la propia app (botón «Actualizar»),
 # como el usuario, no como root:
 #
 #   git pull → compilar → pkexec install.sh

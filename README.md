@@ -1,4 +1,4 @@
-# Lux Mail
+# Mail
 
 Cliente de correo de escritorio hecho con [Lux](vendor/lux): una ventana nativa GTK + WebKitGTK en lugar de un Chromium empaquetado, **LuxScript** en lugar de Node, y **un único binario** que se compila y se ejecuta. Una sola bandeja con varias cuentas, cada una con su color, y cambio fácil de cuenta al enviar o responder.
 
@@ -40,13 +40,13 @@ Binario de escritorio (un solo ejecutable, ventana nativa GTK/WebKit, menú, ban
 ## Instalar y actualizar
 
     cmake -S . -B build && cmake --build build --target luxmail
-    pkexec ./deploy/install.sh --user "$USER"      # o con sudo; deja `lux-mail` en el menú de aplicaciones
+    pkexec ./deploy/install.sh --user "$USER"      # o con sudo; deja `mail-desktop` en el menú de aplicaciones
 
 Al abrir la ventana se compara el commit instalado con GitHub (`git fetch` en el repositorio desde el que se instaló;
-`install.sh` lo anota en `/opt/lux-mail/source` y `version`). Si hay cambios sale un aviso con la lista;
+`install.sh` lo anota en `/opt/mail-desktop/source` y `version`). Si hay cambios sale un aviso con la lista;
 **Actualizar** ejecuta `deploy/update.sh` en segundo plano: `git pull --ff-only`, compilar y `pkexec deploy/install.sh`.
 La contraseña la pide el diálogo del sistema (polkit), una vez y solo para instalar; la app nunca la ve.
-Registro en `~/.cache/lux-mail-update.log`. Al terminar, **Reiniciar Lux Mail** abre la versión nueva y cierra la anterior.
+Registro en `~/.cache/mail-update.log`. Al terminar, **Reiniciar Mail** abre la versión nueva y cierra la anterior.
 `./deploy/install.sh --uninstall` lo quita sin tocar tus correos.
 
 ## Teclado

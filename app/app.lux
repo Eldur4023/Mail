@@ -1,4 +1,4 @@
-# app.lux — Lux Mail: cliente de correo de escritorio.
+# app.lux — Mail: cliente de correo de escritorio.
 #
 # Una sola bandeja con varias cuentas (cada una con su color). Backend en LuxScript, interfaz HTML/JS
 # servida por loopback dentro de una ventana nativa GTK/WebKit (módulo `window`). Los tests corren con el
@@ -15,13 +15,13 @@ import mailparse
 import regex
 
 app:
-    name      "Lux Mail"
+    name      "Mail"
     templates "./templates"
     static    "/static" -> "./public"
     static    "/outbox" -> "./data/outbox"   # lo que se acaba de subir (imágenes del editor); ids aleatorias, solo loopback
 
     window:
-        title     "Lux Mail"
+        title     "Mail"
         width     1280
         height    800
         resizable true
