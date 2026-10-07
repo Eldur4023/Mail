@@ -1,0 +1,257 @@
+# sync.lux — sincronización IMAP -> SQLite + .eml.
+#
+# Solo mensajes nuevos (UID > last_uid) y, la primera vez, los últimos 50 de cada
+# carpeta. Si cambia el UIDVALIDITY la carpeta se vuelve a bajar entera.
+# ponytail: cada llamada imap abre una conexión; con un handle persistente por
+# cuenta la primera sincronización sería mucho más rápida. Los flags de mensajes
+# ya descargados no se refrescan todavía.
+
+fn string role_of(string path, List<Json> attrs):
+    if path.upper() == "INBOX":
+        return "inbox"
+    for int i in range(0, len(attrs)):
+        string a = str(attrs[i])
+        if a == "\\Sent":
+            return "sent"
+        if a == "\\Drafts":
+            return "drafts"
+        if a == "\\Trash":
+            return "trash"
+        if a == "\\Junk":
+            return "junk"
+        if a == "\\Archive" or a == "\\All":
+            return "archive"
+    return ""
+
+fn Json conn_of(Json acc, string secret):
+    Json c = { "host": acc["imap_host"], "port": acc["imap_port"], "tls": acc["imap_tls"], "user": acc["user"] }
+    if acc["auth"] == "password":
+        c["password"] = secret
+    else:
+        c["token"] = secret
+    return c
+
+# Texto para el extracto: el cuerpo en texto, o el HTML sin etiquetas si el correo es solo HTML.
+fn string preview_of(Json m):
+    string t = str(m["text"])
+    if t.trim() != "":
+        return t
+    string h = str(m["html"])
+    if len(h) > 4000:
+        h = h.slice(0, 4000)
+    h = regex.replace("<style[\\s\\S]*?</style>", h, " ")
+    h = regex.replace("<[^>]*>", h, " ")
+    h = h.replace("&nbsp;", " ")
+    return regex.replace("\\s+", h, " ")
+
+# Asunto sin "Re:", "Fwd:", "RV:"... para emparejar respuestas que llegan sin cabeceras de hilo.
+# Devuelve el asunto normalizado; `prefixed` se calcula aparte con subject_has_prefix.
+fn string norm_subject(string subject):
+    string s = subject.trim().lower()
+    for int i in range(0, 6):
+        if s.starts_with("re:") or s.starts_with("fw:") or s.starts_with("rv:"):
+            s = s.slice(3, len(s)).trim()
+        elif s.starts_with("fwd:"):
+            s = s.slice(4, len(s)).trim()
+    return s
+
+fn bool subject_has_prefix(string subject):
+    string s = subject.trim().lower()
+    return s.starts_with("re:") or s.starts_with("fw:") or s.starts_with("rv:") or s.starts_with("fwd:")
+
+# Conversación a la que pertenece un mensaje nuevo. Por este orden:
+#  1. un mensaje al que responde (In-Reply-To / References) que ya tengamos;
+#  2. un mensaje que ya tengamos y que le responde a él (llegó antes que su padre);
+#  3. si es una respuesta (Re:/Fwd: o con In-Reply-To), otro mensaje reciente con el mismo asunto;
+#  4. si no, empieza una conversación propia (su Message-ID, o cuenta+carpeta+uid si no tiene).
+fn string thread_for(int account_id, int folder_id, int uid, Json m):
+    string mid = str(m["message_id"])
+    string refs = str(m["references"]) + " " + str(m["in_reply_to"])
+    if len(refs) > 4000:
+        refs = refs.slice(len(refs) - 4000, len(refs))
+    List<string> ids = regex.find_all("<[^<>]+>", refs)
+    int from_idx = len(ids) - 1
+    int stop = len(ids) - 9
+    for int i in range(from_idx, stop, -1):
+        if i >= 0:
+            List<Json> hit = await sqlite.query("select thread_id from messages where account_id = ? and message_id = ? and thread_id != '' limit 1", account_id, ids[i])
+            if len(hit) > 0:
+                return str(hit[0]["thread_id"])
+    if mid != "":
+        List<Json> kids = await sqlite.query("select thread_id from messages where account_id = ? and thread_id != '' and (in_reply_to = ? or refs like ?) limit 1", account_id, mid, "%" + mid + "%")
+        if len(kids) > 0:
+            return str(kids[0]["thread_id"])
+    string subj = str(m["subject"])
+    if (subject_has_prefix(subj) or str(m["in_reply_to"]) != "") and norm_subject(subj) != "":
+        int since = int(m["date"]) - 30 * 86400
+        List<Json> same = await sqlite.query("select thread_id from messages where account_id = ? and norm_subject = ? and thread_id != '' and date >= ? order by date limit 1", account_id, norm_subject(subj), since)
+        if len(same) > 0:
+            return str(same[0]["thread_id"])
+    if mid != "":
+        return mid
+    return "u:" + str(folder_id) + ":" + str(uid)
+
+fn string snippet_of(string text):
+    string t = text.replace("\r", " ").replace("\n", " ").trim()
+    if len(t) > 160:
+        return t.slice(0, 160)
+    return t
+
+# Mensajes ya descargados que se leyeron aquí sin red: se marcan \Seen en el servidor.
+fn void push_dirty(Json conn, int account_id):
+    List<Json> rows = await sqlite.query("""
+        select m.id, m.uid, f.path from messages m join folders f on f.id = m.folder_id
+        where m.account_id = ? and m.dirty = 1
+        """, account_id)
+    for int i in range(0, len(rows)):
+        must(await imap.set_flags(conn, str(rows[i]["path"]), int(rows[i]["uid"]), "add", ["\\Seen"]))
+        await sqlite.exec("update messages set dirty = 0 where id = ?", int(rows[i]["id"]))
+
+# Trae lo nuevo y, de paso, refresca los flags de los ~200 mensajes locales más recientes y
+# retira los que ya no existen en el servidor (borrados desde otro cliente).
+# ponytail: más allá de esa ventana los cambios de flags no se ven; ampliar si hace falta.
+fn int sync_folder(Json conn, int account_id, int folder_id, string path, string role, int last_uid, int uidvalidity):
+    Json st = must(await imap.status(conn, path))
+    if jint(st["uidvalidity"], 0) != uidvalidity:
+        await sqlite.exec("delete from messages where folder_id = ?", folder_id)
+        last_uid = 0
+        await sqlite.exec("update folders set uidvalidity = ?, last_uid = 0 where id = ?", jint(st["uidvalidity"], 0), folder_id)
+    int since = last_uid + 1
+    if last_uid > 0:
+        List<Json> low = await sqlite.query("select min(uid) as u from (select uid from messages where folder_id = ? order by uid desc limit 200)", folder_id)
+        if len(low) > 0 and low[0]["u"] != null:
+            since = int(low[0]["u"])
+    List<Json> uids = must(await imap.uids(conn, path, since))
+
+    # flags y borrados de lo ya descargado
+    if last_uid > 0:
+        string keep = ","
+        for int i in range(0, len(uids)):
+            keep = keep + str(int(uids[i]["uid"])) + ","
+            if int(uids[i]["uid"]) <= last_uid:
+                int seen = 0
+                List<Json> flags = uids[i]["flags"]
+                for int f in range(0, len(flags)):
+                    if str(flags[f]) == "\\Seen":
+                        seen = 1
+                await sqlite.exec("update messages set seen = ? where folder_id = ? and uid = ? and dirty = 0 and seen != ?", seen, folder_id, int(uids[i]["uid"]), seen)
+        List<Json> local = await sqlite.query("select uid from messages where folder_id = ? and uid >= ?", folder_id, since)
+        for int i in range(0, len(local)):
+            int u = int(local[i]["uid"])
+            if not keep.contains("," + str(u) + ","):
+                os.remove_file("data/eml/" + str(account_id) + "_" + str(folder_id) + "/" + str(u) + ".eml")
+                await sqlite.exec("delete from messages where folder_id = ? and uid = ?", folder_id, u)
+
+    # mensajes nuevos (la primera vez, solo los últimos 50)
+    List<Json> fresh = []
+    for int i in range(0, len(uids)):
+        if int(uids[i]["uid"]) > last_uid:
+            fresh.add(uids[i])
+    int first = 0
+    if last_uid == 0 and len(fresh) > 50:
+        first = len(fresh) - 50
+    int added = 0
+    int top = last_uid
+    for int i in range(first, len(fresh)):
+        int uid = int(fresh[i]["uid"])
+        string raw = must(await imap.fetch(conn, path, uid))
+        Json m = mailparse.parse(raw)
+        string dir = "data/eml/" + str(account_id) + "_" + str(folder_id)
+        os.make_dir(dir)
+        await os.write_file(dir + "/" + str(uid) + ".eml", raw)
+        int seen = 0
+        List<Json> flags = fresh[i]["flags"]
+        for int f in range(0, len(flags)):
+            if str(flags[f]) == "\\Seen":
+                seen = 1
+        string from = str(m["from"])
+        string name = from
+        if from.contains("<"):
+            name = from.slice(0, from.index_of("<")).replace("\"", "").trim()
+        if name == "":
+            name = str(m["from_email"])
+        string thread = await thread_for(account_id, folder_id, uid, m)
+        string refs_text = str(m["references"])
+        if len(refs_text) > 2000:
+            refs_text = refs_text.slice(len(refs_text) - 2000, len(refs_text))
+        await sqlite.exec("insert or ignore into messages(account_id, folder_id, uid, message_id, in_reply_to, refs, thread_id, norm_subject, subject, from_name, from_email, to_text, date, seen, has_att, snippet) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            account_id, folder_id, uid, m["message_id"], m["in_reply_to"], refs_text, thread, norm_subject(str(m["subject"])), m["subject"], name, m["from_email"], m["to"], m["date"], seen,
+            len(m["attachments"]) > 0 ? 1 : 0, snippet_of(preview_of(m)))
+        List<Json> ids = await sqlite.query("select id from messages where folder_id = ? and uid = ?", folder_id, uid)
+        if len(ids) > 0:
+            string body = preview_of(m).replace("\r", " ").replace("\n", " ")
+            if len(body) > 200000:
+                body = body.slice(0, 200000)
+            await sqlite.exec("delete from search where rowid = ?", int(ids[0]["id"]))
+            await sqlite.exec("insert into search(rowid, subject, sender, body) values(?,?,?,?)",
+                int(ids[0]["id"]), m["subject"], str(m["from"]) + " " + str(m["to"]), body)
+        if role != "sent" and role != "drafts":
+            contact_seen(str(m["from_email"]), name)
+        if uid > top:
+            top = uid
+        added = added + 1
+    await sqlite.exec("update folders set last_uid = ? where id = ?", top, folder_id)
+    return added
+
+# Devuelve {total, notify}: "notify" solo cuenta lo que merece aviso (correo nuevo en carpetas que no
+# son Enviados/Borradores/Papelera/Spam, y no la primera descarga de una carpeta).
+fn Json sync_account(int account_id):
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", account_id)
+    if len(accs) == 0:
+        return { "total": 0, "notify": 0 }
+    string secret = await secret_get(account_id)
+    require secret != "" else status(500)
+    Json conn = conn_of(accs[0], secret)
+    await push_dirty(conn, account_id)
+    List<Json> remote = must(await imap.list_folders(conn))
+    for int i in range(0, len(remote)):
+        List<Json> attrs = remote[i]["attrs"]
+        bool skip = false
+        for int a in range(0, len(attrs)):
+            if str(attrs[a]) == "\\Noselect":
+                skip = true
+        if not skip:
+            string path = str(remote[i]["name"])
+            await sqlite.exec("insert or ignore into folders(account_id, path, role) values(?,?,nullif(?, ''))", account_id, path, role_of(path, attrs))
+    # Carpetas que ya no existen en el servidor (borradas o renombradas desde otro cliente): fuera, con sus mensajes.
+    # Solo si la lista remota parece sana (trae una Entrada); una respuesta vacía o rara no debe vaciar el buzón local.
+    string present = "\n"
+    bool sane = false
+    for int i in range(0, len(remote)):
+        present = present + str(remote[i]["name"]) + "\n"
+        if str(remote[i]["name"]).upper() == "INBOX":
+            sane = true
+    if sane:
+        List<Json> known = await sqlite.query("select id, path from folders where account_id = ?", account_id)
+        for int i in range(0, len(known)):
+            if not present.contains("\n" + str(known[i]["path"]) + "\n"):
+                drop_folder(account_id, int(known[i]["id"]))
+    int total = 0
+    int notify = 0
+    List<Json> folders = await sqlite.query("select id, path, role, last_uid, uidvalidity from folders where account_id = ?", account_id)
+    for int i in range(0, len(folders)):
+        string role = jstr(folders[i]["role"], "")
+        int added = await sync_folder(conn, account_id, int(folders[i]["id"]), str(folders[i]["path"]), role, int(folders[i]["last_uid"]), int(folders[i]["uidvalidity"]))
+        total = total + added
+        if int(folders[i]["last_uid"]) > 0 and role != "sent" and role != "drafts" and role != "trash" and role != "junk":
+            notify = notify + added
+    return { "total": total, "notify": notify }
+
+# Sincroniza una cuenta, o todas si no se indica. Un solo sync a la vez.
+post endpoint("/api/sync"):
+    db_init()
+    # marca de tiempo, no un simple "1": si un sync falla a medias no debe bloquear a los siguientes
+    string running = state.get("syncing", "")
+    if running != "" and time.now_seconds() - int(running) < 300:
+        return { "busy": true }
+    state.set("syncing", str(time.now_seconds()))
+    int total = 0
+    int notify = 0
+    List<Json> accs = await sqlite.query("select id from accounts order by id")
+    for int i in range(0, len(accs)):
+        Json r = await sync_account(int(accs[i]["id"]))
+        total = total + int(r["total"])
+        notify = notify + int(r["notify"])
+    state.set("syncing", "")
+    notify_new(notify, str(notify) + (notify == 1 ? " mensaje nuevo" : " mensajes nuevos"))
+    return { "added": total }

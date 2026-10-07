@@ -1,0 +1,3 @@
+# Sustituye a app/window.lux en los tests: el binario `lux` no tiene el módulo window.
+fn void notify_new(int added, string detail):
+    return

@@ -1,0 +1,80 @@
+# Lux Mail
+
+Cliente de correo de escritorio hecho con [Lux](vendor/lux): una ventana nativa GTK + WebKitGTK en lugar de un Chromium empaquetado, **LuxScript** en lugar de Node, y **un único binario** que se compila y se ejecuta. Una sola bandeja con varias cuentas, cada una con su color, y cambio fácil de cuenta al enviar o responder.
+
+## Estructura
+
+| Ruta | Qué es |
+|---|---|
+| `app/` | La app, en LuxScript: `app.lux` (configuración y ventana), `sync.lux` (IMAP → SQLite), `messages.lux`, `send.lux`, `drafts.lux`, `actions.lux`, `folders.lux`, `accounts.lux`, `contacts.lux`, `db.lux`, `secrets.lux`, `window.lux` (menú, bandeja, notificaciones) y la interfaz en `templates/` y `public/`. |
+| `src/`, `include/`, `third_party/webview` | El shell de escritorio: ventana GTK/WebKit, arranque del servidor Lux por loopback y extracción de los recursos embebidos. |
+| `vendor/lux/` | Lux como código fuente, con los módulos nativos de correo (`imap`, `mail`, `mailparse`, `keyring`) y `window`. |
+| `tools/` | `respack` (embebe `app/` en el binario), `check_account.py` (diagnóstico de una cuenta) y `vendor_modules.py` (sincroniza los módulos de correo desde el repositorio `Lux` hermano, adaptándolos al Lux vendorizado). |
+| `tests/` | Prueba de extremo a extremo con servidores IMAP y SMTP falsos. |
+
+Los módulos nativos de correo se desarrollan en el repositorio **`Lux`** (carpeta hermana de esta) y se copian aquí con `python3 tools/vendor_modules.py`.
+
+## Probar con tu correo real
+
+1. **Llavero:** `sudo apt install libsecret-tools` (y un servicio de llavero activo: GNOME Keyring o KWallet). Las contraseñas van ahí, nunca a la base de datos.
+2. **Comprueba la cuenta antes de añadirla** (opcional, no guarda nada ni envía nada):
+
+       python3 tools/check_account.py tu@dominio.es --imap imap.dominio.es --smtp smtp.dominio.es
+
+   Pide la contraseña por teclado, hace login IMAP y SMTP, y lista las carpetas con su rol (Enviados, Borradores, Papelera, Archivo, Spam) y las capacidades del servidor. Opciones: `--user` si el login no es el correo, `--imap-starttls`, `--smtp-ssl` (puerto 465).
+3. **Compila y arranca:** `cmake -S . -B build && cmake --build build --target luxmail && ./build/luxmail`.
+4. **+ Cuenta:** al escribir el correo se sugieren los servidores (`imap.<dominio>` / `smtp.<dominio>`, o los de los proveedores habituales); revisa y pulsa **Probar conexión**, que comprueba IMAP y SMTP por separado. Luego Guardar.
+5. La primera sincronización baja los **últimos 50 mensajes de cada carpeta**; después solo lo nuevo. Se repite cada 3 minutos y al pulsar ⟳. Los datos viven en `~/.local/share/lux-desktop/luxmail/`.
+
+Si algo no cuadra (carpetas sin rol, mensajes que no aparecen), mira primero la salida de `check_account.py`.
+
+## Ejecutar
+
+Binario de escritorio (un solo ejecutable, ventana nativa GTK/WebKit, menú, bandeja y notificaciones):
+
+    cmake -S . -B build && cmake --build build --target luxmail && ./build/luxmail
+    cmake --build build --target luxmail-dev && ./build/luxmail-dev   # lee app/ del disco y recarga solo
+
+(En `luxmail-dev` los datos van a `app/data/` y el vigilante recarga la página al escribir ahí, p. ej. al recuperar adjuntos de un borrador; usa el binario empaquetado para probar eso.)
+
+## Instalar y actualizar
+
+    cmake -S . -B build && cmake --build build --target luxmail
+    pkexec ./deploy/install.sh --user "$USER"      # o con sudo; deja `lux-mail` en el menú de aplicaciones
+
+Al abrir la ventana se compara el commit instalado con GitHub (`git fetch` en el repositorio desde el que se instaló;
+`install.sh` lo anota en `/opt/lux-mail/source` y `version`). Si hay cambios sale un aviso con la lista;
+**Actualizar** ejecuta `deploy/update.sh` en segundo plano: `git pull --ff-only`, compilar y `pkexec deploy/install.sh`.
+La contraseña la pide el diálogo del sistema (polkit), una vez y solo para instalar; la app nunca la ve.
+Registro en `~/.cache/lux-mail-update.log`. Al terminar, **Reiniciar Lux Mail** abre la versión nueva y cierra la anterior.
+`./deploy/install.sh --uninstall` lo quita sin tocar tus correos.
+
+## Teclado
+
+`j`/`k` o `↓`/`↑` moverse por la lista · `Intro` abrir en pestaña · `w` o `Esc` cerrar pestaña · `[` `]` cambiar de pestaña · `x` marcar · `/` buscar · `c` redactar · `r` responder · `a` responder a todos · `f` reenviar · `e` archivar · `!` spam · `m` mover · `u` no leído · `Supr` eliminar · `?` ayuda · `Esc` cancelar. En la redacción: `Ctrl+S` guarda, `Ctrl+Intro` envía, `Ctrl+1…9` cambia de cuenta.
+
+## Estado
+
+Hecho:
+- Varias cuentas IMAP/SMTP (contraseña en el llavero) en una bandeja unificada, con color por cuenta y filtro por cuenta.
+- Sincronización incremental a SQLite + `.eml` (lee offline), con flags, borrados y carpetas que viajan en los dos sentidos.
+- Conversaciones agrupadas (por `In-Reply-To`/`References`, y por asunto en respuestas sin cabeceras); abrir una la deja leída.
+- Lectura segura (HTML aislado sin scripts, imágenes remotas bloqueadas, imágenes incrustadas visibles), búsqueda de texto completo FTS5.
+- Redactar, responder, responder a todos y reenviar eligiendo la cuenta «De:»; adjuntos (también al reenviar); firma por cuenta; texto plano o enriquecido (negrita, cursiva, subrayado, listas, enlaces, **imágenes en el cuerpo**; se envía con alternativa de texto y el HTML se filtra por lista blanca).
+- Borradores en el servidor (se reabren con adjuntos e imágenes).
+- Archivar, spam, eliminar (definitivo desde la Papelera, con confirmación), marcar leído/no leído y mover a cualquier carpeta, siempre sobre la conversación entera. Selección múltiple con las mismas acciones en lote.
+- **Carpetas propias**: crear, renombrar y eliminar desde la barra lateral (nombres con tildes y `&` en UTF-7 modificado); las que se borran o renombran desde otro cliente se retiran al sincronizar.
+- Ajustes de cuenta (nombre, color, firma, contraseña, quitar cuenta), probar conexión antes de guardar, contactos con autocompletado.
+- Escritorio: tema oscuro naranja, menú con atajos, bandeja del sistema y notificación de correo nuevo.
+- Los fallos del servidor (IMAP caído, SMTP rechazado, MOVE denegado) abortan la operación sin tocar lo local ni dar nada por enviado.
+
+Límites conocidos: sin IDLE (se sondea cada 3 min); cada llamada IMAP abre una conexión nueva; carpetas solo de primer nivel al crear; sin OAuth2.
+
+Pruebas de extremo a extremo (IMAP y SMTP falsos): `tests/run_mail.sh` (usa `build/vendor/lux/lux`). Los módulos nativos se prueban en el repositorio hermano `../Lux/tests/` (`run_imap.sh`, `run_mailparse.sh`).
+
+## OAuth2 (decidido: no se implementa)
+
+Solo se usa IMAP/SMTP con contraseña (cuentas propias). Gmail/Outlook con OAuth2 queda sin hacer a propósito, pero el
+terreno está preparado: los módulos `imap` y `mail` aceptan `token` (XOAUTH2) en vez de `password`, y `accounts.auth`
+admite `oauth_google` / `oauth_ms`. Faltaría el flujo de login (abrir el navegador, recibir el `code` en una ruta
+loopback, canjearlo y refrescar tokens) y client IDs propios.

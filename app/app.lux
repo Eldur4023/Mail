@@ -1,0 +1,36 @@
+# app.lux — Lux Mail: cliente de correo de escritorio.
+#
+# Una sola bandeja con varias cuentas (cada una con su color). Backend en LuxScript, interfaz HTML/JS
+# servida por loopback dentro de una ventana nativa GTK/WebKit (módulo `window`). Los tests corren con el
+# binario `lux` a secas, que no tiene ese módulo: ver tests/run_mail.sh.
+import sqlite
+import os
+import window
+import hash
+import keyring
+import time
+import imap
+import mail
+import mailparse
+import regex
+
+app:
+    name      "Lux Mail"
+    templates "./templates"
+    static    "/static" -> "./public"
+    static    "/outbox" -> "./data/outbox"   # lo que se acaba de subir (imágenes del editor); ids aleatorias, solo loopback
+
+    window:
+        title     "Lux Mail"
+        width     1280
+        height    800
+        resizable true
+        dark      true
+        icon      "./icon.png"
+
+    sqlite:
+        file "./data/mail.db"
+        pool 4
+
+get endpoint("/"):
+    return render("index.html")

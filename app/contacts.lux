@@ -1,0 +1,30 @@
+# contacts.lux — libreta de direcciones que se rellena sola (al recibir y al enviar).
+
+# "Ana López <ana@x.com>" -> nombre y correo. Sin "<>", todo es el correo.
+fn string addr_email(string a):
+    if a.contains("<") and a.contains(">"):
+        return a.slice(a.index_of("<") + 1, a.index_of(">")).trim().lower()
+    return a.trim().lower()
+
+fn string addr_name(string a):
+    if a.contains("<"):
+        return a.slice(0, a.index_of("<")).replace("\"", "").trim()
+    return ""
+
+# Suma un uso. Las direcciones de las propias cuentas no son contactos.
+fn void contact_seen(string email, string name):
+    if email == "" or not email.contains("@"):
+        return
+    List<Json> own = await sqlite.query("select 1 from accounts where lower(email) = ?", email)
+    if len(own) > 0:
+        return
+    await sqlite.exec("""
+        insert into contacts(email, name, uses, last_used) values(?, ?, 1, unixepoch())
+        on conflict(email) do update set uses = uses + 1, last_used = unixepoch(),
+            name = case when excluded.name != '' then excluded.name else contacts.name end
+        """, email, name)
+
+get endpoint("/api/contacts"):
+    db_init()
+    string q = "%" + query("q", "") + "%"
+    return await sqlite.query("select email, name from contacts where email like ? or name like ? order by uses desc, last_used desc limit 8", q, q)

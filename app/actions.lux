@@ -1,0 +1,130 @@
+# actions.lux — mover, archivar, borrar y marcar mensajes. Primero el servidor, y solo si responde se
+# cambia lo local: así nunca se muestra como hecho algo que no lo está. El mensaje reaparece en su
+# nueva carpeta con el siguiente sync (el cliente lo lanza al terminar).
+
+# Mensaje + cuenta + carpeta de origen. Json null si no existe.
+fn Json message_ctx(int id):
+    List<Json> rows = await sqlite.query("""
+        select m.id, m.account_id, m.folder_id, m.uid, f.path, f.role
+        from messages m join folders f on f.id = m.folder_id where m.id = ?
+        """, id)
+    if len(rows) == 0:
+        return null
+    return rows[0]
+
+# Conexión IMAP de una cuenta, o null si falta la cuenta o su contraseña.
+fn Json conn_for(int account_id):
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", account_id)
+    if len(accs) == 0:
+        return null
+    string secret = await secret_get(account_id)
+    if secret == "":
+        return null
+    return conn_of(accs[0], secret)
+
+fn void forget_message(Json ctx):
+    os.remove_file("data/eml/" + str(ctx["account_id"]) + "_" + str(ctx["folder_id"]) + "/" + str(ctx["uid"]) + ".eml")
+    await sqlite.exec("delete from messages where id = ?", int(ctx["id"]))   # el trigger limpia el índice de búsqueda
+
+# Mueve (o borra) un mensaje y, con scope = thread, toda su conversación en esa carpeta (lo que espera quien
+# archiva o borra desde la lista agrupada). Devuelve "" si todo fue bien, o el código HTTP que corresponde:
+# "404" no existe, "400" petición inválida, "409" la cuenta no tiene esa carpeta, "500" sin contraseña.
+# to = inbox | archive | trash | junk (la carpeta con ese rol) | folder (la carpeta folder_id, de la misma
+# cuenta y distinta de la actual) | delete (borrado definitivo).
+fn string move_one(int id, string to, int folder_id, string scope):
+    Json ctx = await message_ctx(id)
+    if ctx == null:
+        return "404"
+    Json conn = await conn_for(int(ctx["account_id"]))
+    if conn == null:
+        return "500"
+    if not (to == "delete" or to == "folder" or to == "inbox" or to == "archive" or to == "trash" or to == "junk"):
+        return "400"
+    string dest = ""
+    if to == "folder":
+        List<Json> target = await sqlite.query("select path from folders where id = ? and account_id = ? and id != ?", folder_id, int(ctx["account_id"]), int(ctx["folder_id"]))
+        if len(target) == 0:
+            return "400"
+        dest = str(target[0]["path"])
+    elif to != "delete":
+        Json found = await folder_of(int(ctx["account_id"]), to)
+        if found == null:
+            return "409"
+        dest = str(found)
+
+    List<Json> targets = [ctx]
+    if scope == "thread":
+        targets = await sqlite.query("""
+            select m.id, m.account_id, m.folder_id, m.uid, f.path, f.role
+            from messages m join folders f on f.id = m.folder_id
+            where m.account_id = ? and m.folder_id = ?
+              and m.thread_id = (select thread_id from messages where id = ?)
+            """, int(ctx["account_id"]), int(ctx["folder_id"]), id)
+    for int i in range(0, len(targets)):
+        if to == "delete":
+            must(await imap.remove(conn, str(targets[i]["path"]), int(targets[i]["uid"])))
+        else:
+            must(await imap.move(conn, str(targets[i]["path"]), int(targets[i]["uid"]), dest))
+        forget_message(targets[i])
+    return ""
+
+post endpoint("/api/message/:id/move", int id):
+    db_init()
+    string err = await move_one(id, form("to", ""), int(form("folder_id", "0")), form("scope", "message"))
+    if err != "":
+        return status(int(err))
+    return status(204)
+
+# Varios a la vez: ids (uno por línea, el id de la fila de cada conversación) + los mismos campos de arriba.
+# Siempre por conversación. Devuelve cuántos se movieron y cuántos fallaron; un fallo no detiene el resto.
+post endpoint("/api/messages/move"):
+    db_init()
+    List<string> ids = lines_of(form("ids", ""))
+    require len(ids) > 0 else status(400)
+    int moved = 0
+    int failed = 0
+    string last = ""
+    for int i in range(0, len(ids)):
+        string err = await move_one(int(ids[i]), form("to", ""), int(form("folder_id", "0")), "thread")
+        if err == "":
+            moved = moved + 1
+        else:
+            failed = failed + 1
+            last = err
+    return { "moved": moved, "failed": failed, "error": last }
+
+# Leído / no leído en lote (seen = 1 | 0). Leído: toda la conversación, pendiente de enviarse al servidor con el
+# siguiente sync. No leído: el mensaje de la fila (el más reciente), enviado ya.
+post endpoint("/api/messages/seen"):
+    db_init()
+    List<string> ids = lines_of(form("ids", ""))
+    require len(ids) > 0 else status(400)
+    bool mark_seen = form("seen", "1") == "1"
+    int done = 0
+    for int i in range(0, len(ids)):
+        int id = int(ids[i])
+        if mark_seen:
+            await sqlite.exec("""
+                update messages set seen = 1, dirty = 1 where seen = 0 and folder_id = (select folder_id from messages where id = ?)
+                and account_id = (select account_id from messages where id = ?) and thread_id = (select thread_id from messages where id = ?)
+                """, id, id, id)
+            done = done + 1
+        else:
+            Json ctx = await message_ctx(id)
+            if ctx != null:
+                Json conn = await conn_for(int(ctx["account_id"]))
+                if conn != null:
+                    must(await imap.set_flags(conn, str(ctx["path"]), int(ctx["uid"]), "remove", ["\\Seen"]))
+                    await sqlite.exec("update messages set seen = 0, dirty = 0 where id = ?", id)
+                    done = done + 1
+    return { "done": done }
+
+post endpoint("/api/message/:id/unseen", int id):
+    db_init()
+    Json ctx = await message_ctx(id)
+    require ctx != null else status(404)
+    Json conn = await conn_for(int(ctx["account_id"]))
+    require conn != null else status(500)
+    must(await imap.set_flags(conn, str(ctx["path"]), int(ctx["uid"]), "remove", ["\\Seen"]))
+    await sqlite.exec("update messages set seen = 0, dirty = 0 where id = ?", id)
+    return status(204)

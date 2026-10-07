@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Lux Mail
+Comment=Correo de escritorio: varias cuentas en una bandeja
+Exec=lux-mail
+Icon=lux-mail
+Terminal=false
+Categories=Network;Email;
+Keywords=correo;email;imap;

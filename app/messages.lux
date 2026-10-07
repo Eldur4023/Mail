@@ -1,0 +1,118 @@
+# messages.lux — lista unificada y lectura de un mensaje.
+
+# "ana presu" -> "ana"* "presu"*: cada palabra entre comillas y como prefijo, para que nada de lo que
+# escriba el usuario se interprete como sintaxis de FTS5 (AND, NEAR, columnas, paréntesis...).
+fn string fts_query(string q):
+    string out = ""
+    List<string> words = q.replace("\"", " ").split(" ")
+    for int i in range(0, len(words)):
+        string w = words[i].trim()
+        if w != "":
+            out = out + (out == "" ? "" : " ") + "\"" + w + "\"*"
+    return out
+
+# role = inbox|sent|drafts|trash|junk|archive; account = 0 para todas; q = búsqueda de texto completo
+# (asunto, remitente y cuerpo, sin distinguir acentos ni mayúsculas).
+get endpoint("/api/messages"):
+    db_init()
+    string role = query("role", "inbox")
+    int account = int(query("account", "0"))
+    int folder = int(query("folder", "0"))   # una carpeta concreta (p. ej. una propia del servidor); si no, por rol
+    string fts = fts_query(query("q", ""))
+    if fts == "":
+        # Una fila por conversación (dentro de la carpeta): la del mensaje más reciente, con cuántos
+        # mensajes tiene y cuántos sin leer.
+        return await sqlite.query("""
+            select m.id, m.account_id, m.folder_id, m.thread_id, a.color, a.name as account_name, m.subject, m.from_name, m.from_email,
+                   m.to_text, m.date, m.seen, m.has_att, m.snippet,
+                   (select count(*) from messages t join folders tf on tf.id = t.folder_id
+                     where t.account_id = m.account_id and t.thread_id = m.thread_id and tf.id = f.id) as thread_count,
+                   (select count(*) from messages t join folders tf on tf.id = t.folder_id
+                     where t.account_id = m.account_id and t.thread_id = m.thread_id and tf.id = f.id and t.seen = 0) as thread_unseen
+            from messages m join folders f on f.id = m.folder_id join accounts a on a.id = m.account_id
+            where ((? > 0 and f.id = ?) or (? = 0 and f.role = ?)) and (? = 0 or m.account_id = ?)
+              and m.id = (select t.id from messages t join folders tf on tf.id = t.folder_id
+                          where t.account_id = m.account_id and t.thread_id = m.thread_id and tf.id = f.id
+                          order by t.date desc, t.id desc limit 1)
+            order by m.date desc limit 200
+            """, folder, folder, folder, role, account, account)
+    return await sqlite.query("""
+        select m.id, m.account_id, m.folder_id, m.thread_id, a.color, a.name as account_name, m.subject, m.from_name, m.from_email,
+               m.to_text, m.date, m.seen, m.has_att, snippet(search, 2, '', '', '…', 12) as snippet, 1 as thread_count, 1 - m.seen as thread_unseen
+        from search join messages m on m.id = search.rowid
+        join folders f on f.id = m.folder_id join accounts a on a.id = m.account_id
+        where search match ? and ((? > 0 and f.id = ?) or (? = 0 and f.role = ?)) and (? = 0 or m.account_id = ?)
+        order by m.date desc limit 200
+        """, fts, folder, folder, folder, role, account, account)
+
+get endpoint("/api/folders"):
+    db_init()
+    return await sqlite.query("""
+        select f.id, f.account_id, f.path, f.role, (select count(*) from messages m where (f.role = 'inbox' or f.role is null) and m.folder_id = f.id and m.seen = 0) as unseen
+        from folders f order by f.account_id, f.path
+        """)
+
+get endpoint("/api/message/:id", int id):
+    db_init()
+    List<Json> rows = await sqlite.query("""
+        select m.*, f.path, f.role, a.color, a.email as account_email from messages m
+        join folders f on f.id = m.folder_id join accounts a on a.id = m.account_id where m.id = ?
+        """, id)
+    require len(rows) > 0 else status(404)
+    Json r = rows[0]
+    string raw = await os.read_file("data/eml/" + str(r["account_id"]) + "_" + str(r["folder_id"]) + "/" + str(r["uid"]) + ".eml")
+    Json p = mailparse.parse(raw)
+    return { "id": id, "account_id": r["account_id"], "color": r["color"], "account_email": r["account_email"],
+             "subject": p["subject"], "from": p["from"], "from_email": p["from_email"], "thread_id": r["thread_id"], "folder_id": r["folder_id"], "to": p["to"], "cc": p["cc"], "bcc": p["bcc"], "role": r["role"],
+             "date": p["date"], "message_id": p["message_id"], "references": p["references"], "in_reply_to": p["in_reply_to"], "text": p["text"], "html": p["html"], "html_cid": p["html_cid"],
+             "attachments": p["attachments"] }
+
+# Se marca en local al instante; si el servidor no responde queda dirty=1 y el próximo sync lo envía.
+# Todos los mensajes de la conversación del mensaje `id` (de cualquier carpeta de su cuenta), del más
+# antiguo al más reciente.
+get endpoint("/api/thread/:id", int id):
+    db_init()
+    return await sqlite.query("""
+        select t.id, t.subject, t.from_name, t.from_email, t.date, t.seen, f.role
+        from messages m join messages t on t.account_id = m.account_id and t.thread_id = m.thread_id
+        join folders f on f.id = t.folder_id
+        where m.id = ? order by t.date, t.id
+        """, id)
+
+post endpoint("/api/message/:id/seen", int id):
+    db_init()
+    List<Json> rows = await sqlite.query("select m.account_id, m.uid, m.seen, f.path from messages m join folders f on f.id = m.folder_id where m.id = ?", id)
+    require len(rows) > 0 else status(404)
+    # Abrir una conversación la deja leída entera: todos sus mensajes sin leer de esta carpeta (el abierto
+    # incluido) quedan leídos aquí y pendientes de enviarse al servidor (dirty) con el siguiente sync.
+    bool was_unseen = int(rows[0]["seen"]) == 0
+    await sqlite.exec("""
+        update messages set seen = 1, dirty = 1 where seen = 0 and folder_id = (select folder_id from messages where id = ?)
+        and account_id = (select account_id from messages where id = ?) and thread_id = (select thread_id from messages where id = ?)
+        """, id, id, id)
+    if not was_unseen:
+        return status(204)
+    # El abierto se envía ya, para que otros clientes lo vean al momento; si no hay red queda dirty.
+    int account_id = int(rows[0]["account_id"])
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", account_id)
+    string secret = await secret_get(account_id)
+    if len(accs) > 0 and secret != "":
+        Json conn = conn_of(accs[0], secret)
+        must(await imap.set_flags(conn, str(rows[0]["path"]), int(rows[0]["uid"]), "add", ["\\Seen"]))
+        await sqlite.exec("update messages set dirty = 0 where id = ?", id)
+    return status(204)
+
+# Dominios de remitentes seguros para imágenes.
+get endpoint("/api/safe-domains"):
+    db_init()
+    return await sqlite.query("select domain from safe_domains order by domain")
+
+post endpoint("/api/safe-domain"):
+    db_init()
+    string domain = form("domain", "").trim().lower()
+    require domain != "" and len(domain) <= 253 and not domain.contains(" ") and not domain.contains("@") else status(400)
+    if form("safe", "1") == "1":
+        await sqlite.exec("insert or ignore into safe_domains(domain) values(?)", domain)
+    else:
+        await sqlite.exec("delete from safe_domains where domain = ?", domain)
+    return status(204)

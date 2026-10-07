@@ -1,0 +1,36 @@
+# drafts.lux — borradores en la carpeta Borradores del servidor (los ve cualquier cliente).
+#
+# Guardar = añadir la versión nueva y retirar la anterior (se encuentra por su Message-ID, porque
+# APPEND no dice qué UID le da el servidor). El navegador guarda el Message-ID de la última versión.
+# Los adjuntos viajan dentro del borrador y se recuperan al reabrirlo (/api/message/:id/attachments).
+
+post endpoint("/api/draft"):
+    db_init()
+    int id = int(form("account", "0"))
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", id)
+    require len(accs) > 0 else status(400)
+    Json folder = await folder_of(id, "drafts")
+    require folder != null else status(409)
+    string secret = await secret_get(id)
+    require secret != "" else status(500)
+    Json conn = conn_of(accs[0], secret)
+    require uploads_ok(lines_of(form("attachments", ""))) else status(400)
+    require inline_ok(lines_of(form("inline", ""))) else status(400)
+
+    string raw = mail.compose(message_from_form(accs[0], secret, true))
+    must(await imap.append(conn, str(folder), raw))
+    await remove_draft(conn, str(folder), form("replaces", ""))
+    Json parsed = mailparse.parse(raw)
+    return { "message_id": parsed["message_id"] }
+
+# Descartar: borra del servidor la versión guardada (si la hay).
+post endpoint("/api/draft/discard"):
+    db_init()
+    int id = int(form("account", "0"))
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", id)
+    require len(accs) > 0 else status(400)
+    Json folder = await folder_of(id, "drafts")
+    string secret = await secret_get(id)
+    if folder != null and secret != "":
+        await remove_draft(conn_of(accs[0], secret), str(folder), form("message_id", ""))
+    return status(204)

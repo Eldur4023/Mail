@@ -1,0 +1,27 @@
+# util.lux — conversiones Json -> tipos simples.
+
+fn string jstr(Json j, string def):
+    if j == null:
+        return def
+    return str(j)
+
+fn int jint(Json j, int def):
+    if j == null:
+        return def
+    return int(j)
+
+# El runtime entrega el fallo de una función nativa asíncrona (imap, mail, keyring...) como el VALOR
+# {"error": "..."} en lugar de lanzarlo (el Lux nuevo sí lo lanza). Sin esto, un servidor caído parecería
+# "todo bien" y se seguiría con el resto (borrar lo local, dar el mensaje por enviado...). must() lo convierte
+# en una excepción: la ruta responde 500 y los `try` lo atrapan. El mensaje queda en el log.
+fn string native_error(Json r):
+    if str(r).starts_with("{\"error\":"):
+        return str(r["error"])
+    return ""
+
+fn Json must(Json r):
+    if str(r).starts_with("{\"error\":"):
+        log.warn("llamada nativa fallida: " + str(r))
+        int zero = 0
+        int boom = 1 / zero
+    return r

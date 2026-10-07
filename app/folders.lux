@@ -1,0 +1,55 @@
+# folders.lux — crear, renombrar y borrar carpetas propias (las que no tienen rol: Entrada, Enviados...
+# no se tocan). Primero el servidor; lo local solo si responde.
+
+# Nombre válido: no vacío, sin caracteres de control, sin "/" ni "\" (aquí solo se crean carpetas de primer nivel).
+fn bool folder_name_ok(string name):
+    string n = name.trim()
+    if n == "" or len(n) > 100 or n.contains("/") or n.contains("\\") or n.contains("\n") or n.contains("\r"):
+        return false
+    return true
+
+post endpoint("/api/folders"):
+    db_init()
+    int account = int(form("account", "0"))
+    string name = form("name", "").trim()
+    require folder_name_ok(name) else status(400)
+    Json conn = await conn_for(account)
+    require conn != null else status(404)
+    List<Json> same = await sqlite.query("select 1 from folders where account_id = ? and path = ?", account, name)
+    require len(same) == 0 else status(409)
+    must(await imap.create_folder(conn, name))
+    await sqlite.exec("insert or ignore into folders(account_id, path, role) values(?, ?, null)", account, name)
+    return status(204)
+
+post endpoint("/api/folders/:id/rename", int id):
+    db_init()
+    List<Json> rows = await sqlite.query("select account_id, path, role from folders where id = ?", id)
+    require len(rows) > 0 else status(404)
+    require rows[0]["role"] == null else status(400)
+    string name = form("name", "").trim()
+    require folder_name_ok(name) else status(400)
+    int account = int(rows[0]["account_id"])
+    List<Json> same = await sqlite.query("select 1 from folders where account_id = ? and path = ?", account, name)
+    require len(same) == 0 else status(409)
+    Json conn = await conn_for(account)
+    require conn != null else status(500)
+    must(await imap.rename_folder(conn, str(rows[0]["path"]), name))
+    await sqlite.exec("update folders set path = ? where id = ?", name, id)
+    return status(204)
+
+# Borrar una carpeta propia borra también sus mensajes en el servidor (es lo que hace IMAP).
+post endpoint("/api/folders/:id/delete", int id):
+    db_init()
+    List<Json> rows = await sqlite.query("select account_id, path, role from folders where id = ?", id)
+    require len(rows) > 0 else status(404)
+    require rows[0]["role"] == null else status(400)
+    Json conn = await conn_for(int(rows[0]["account_id"]))
+    require conn != null else status(500)
+    must(await imap.delete_folder(conn, str(rows[0]["path"])))
+    drop_folder(int(rows[0]["account_id"]), id)
+    return status(204)
+
+# Quita una carpeta de la base local con sus mensajes (cascada + trigger del índice) y sus .eml.
+fn void drop_folder(int account_id, int folder_id):
+    os.remove_dir("data/eml/" + str(account_id) + "_" + str(folder_id), true)
+    await sqlite.exec("delete from folders where id = ?", folder_id)

@@ -1,0 +1,89 @@
+# db.lux — esquema SQLite. Perezoso e idempotente: lo llama la primera petición.
+#
+# messages guarda las cabeceras y un fragmento; el cuerpo vive en data/eml/ como
+# .eml (lectura sin red). La bandeja unificada es "role = 'inbox'" sin filtrar
+# por cuenta.
+
+fn void db_init():
+    if state.get("db_ready", "") == "1":
+        return
+    os.make_dir("data")
+    os.make_dir("data/eml")
+    # adjuntos subidos y nunca enviados: se tiran al arrancar
+    if os.is_dir("data/outbox"):
+        os.remove_dir("data/outbox", true)
+    if state.get("db_init_running", "") == "1":
+        for int i in range(0, 200):
+            await sleep(50)
+            if state.get("db_ready", "") == "1":
+                return
+        return
+    state.set("db_init_running", "1")
+
+    await sqlite.exec("""
+        create table if not exists accounts(
+            id integer primary key autoincrement,
+            name text not null,
+            email text not null,
+            color text not null default '#d97757',
+            user text not null,
+            auth text not null default 'password' check(auth in ('password','oauth_google','oauth_ms')),
+            imap_host text not null, imap_port integer not null default 993, imap_tls text not null default 'tls',
+            smtp_host text not null, smtp_port integer not null default 587, smtp_tls text not null default 'starttls',
+            signature text not null default '',
+            created_at integer not null default (unixepoch())
+        )
+    """)
+    await sqlite.exec("""
+        create table if not exists folders(
+            id integer primary key autoincrement,
+            account_id integer not null references accounts(id) on delete cascade,
+            path text not null,
+            role text,
+            uidvalidity integer not null default 0,
+            last_uid integer not null default 0,
+            unique(account_id, path)
+        )
+    """)
+    await sqlite.exec("""
+        create table if not exists messages(
+            id integer primary key autoincrement,
+            account_id integer not null references accounts(id) on delete cascade,
+            folder_id integer not null references folders(id) on delete cascade,
+            uid integer not null,
+            message_id text not null default '',
+            in_reply_to text not null default '',
+            refs text not null default '',
+            thread_id text not null default '',
+            norm_subject text not null default '',
+            subject text not null default '',
+            from_name text not null default '',
+            from_email text not null default '',
+            to_text text not null default '',
+            date integer not null default 0,
+            seen integer not null default 0,
+            dirty integer not null default 0,
+            has_att integer not null default 0,
+            snippet text not null default '',
+            unique(folder_id, uid)
+        )
+    """)
+    await sqlite.exec("""
+        create table if not exists contacts(
+            email text primary key,
+            name text not null default '',
+            uses integer not null default 0,
+            last_used integer not null default 0
+        )
+    """)
+    # remitentes de confianza: sus correos cargan todas las imágenes (sin quitar las diminutas)
+    await sqlite.exec("create table if not exists safe_domains(domain text primary key)")
+    # búsqueda de texto completo; rowid = messages.id. El trigger la limpia cuando se borra un mensaje
+    # (a mano, por uidvalidity, o en cascada al quitar una cuenta).
+    await sqlite.exec("create virtual table if not exists search using fts5(subject, sender, body, tokenize = 'unicode61 remove_diacritics 2')")
+    await sqlite.exec("create trigger if not exists messages_ad after delete on messages begin delete from search where rowid = old.id; end")
+    await sqlite.exec("create index if not exists idx_messages_date on messages(date desc)")
+    await sqlite.exec("create index if not exists idx_messages_thread on messages(account_id, thread_id)")
+    await sqlite.exec("create index if not exists idx_messages_msgid on messages(account_id, message_id)")
+    await sqlite.exec("create index if not exists idx_messages_folder on messages(folder_id, date desc)")
+    state.set("db_ready", "1")

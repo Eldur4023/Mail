@@ -1,0 +1,178 @@
+# send.lux — enviar como cualquiera de las cuentas.
+#
+# Campos: account (id), to/cc/bcc (una dirección por línea), subject, body,
+# html (opcional: mensaje enriquecido, con `body` como alternativa de texto), in_reply_to, references, attachments (ids de /api/upload, uno por línea) y draft (Message-ID
+# del borrador que se está enviando, para retirarlo de Borradores).
+# El mensaje se compone una vez (mail.compose) y esa misma copia se envía por SMTP y se guarda
+# en Enviados, con el mismo Message-ID.
+# Adjuntos: se suben antes a /api/upload (multipart, el vendor no lee campos de texto en una
+# ruta multipart) y aquí se citan por id. Tope ~16 MB por subida: el vendor no tiene max_body.
+# ponytail: solo texto plano.
+
+fn string quote_name(string name):
+    return "\"" + name.replace("\"", "").replace("\\", "") + "\""
+
+# Ruta de la carpeta con ese rol ("sent", "drafts") de la cuenta, o null.
+fn Json folder_of(int account_id, string role):
+    List<Json> f = await sqlite.query("select path from folders where account_id = ? and role = ? limit 1", account_id, role)
+    if len(f) == 0:
+        return null
+    return f[0]["path"]
+
+# "a@x\n b@y\n" -> ["a@x", "b@y"] (sin vacías)
+fn List<string> lines_of(string s):
+    List<string> out = []
+    List<string> parts = s.split("\n")
+    for int i in range(0, len(parts)):
+        string p = parts[i].trim()
+        if p != "":
+            out.add(p)
+    return out
+
+fn bool is_upload_id(string id):
+    if len(id) != 16:
+        return false
+    for int i in range(0, 16):
+        if not "0123456789abcdef".contains(id.slice(i, i + 1)):
+            return false
+    return true
+
+# ¿Son todos ids de subida válidos (16 hex) con un fichero cada uno? Las rutas lo exigen con
+# `require` (un require dentro de una función auxiliar no corta la petición).
+fn bool uploads_ok(List<string> ids):
+    for int i in range(0, len(ids)):
+        if not is_upload_id(ids[i]):
+            return false
+        if not os.is_dir("data/outbox/" + ids[i]) or len(os.list_dir("data/outbox/" + ids[i])) != 1:
+            return false
+    return true
+
+# Las imágenes que van dentro del HTML solo pueden ser imágenes de las que el navegador sabe pintar.
+fn bool image_name(string name):
+    string n = name.lower()
+    return n.ends_with(".png") or n.ends_with(".jpg") or n.ends_with(".jpeg") or n.ends_with(".gif") or n.ends_with(".webp")
+
+fn bool inline_ok(List<string> ids):
+    if not uploads_ok(ids):
+        return false
+    for int i in range(0, len(ids)):
+        if not image_name(os.list_dir("data/outbox/" + ids[i])[0]):
+            return false
+    return true
+
+# Adjuntos subidos (ya validados con uploads_ok) -> lista para mail.compose. Con inline = true cada uno lleva
+# su id como cid: es una imagen a la que el HTML se refiere como <img src="cid:id">.
+fn List<Json> load_attachments(List<string> ids, bool inline):
+    List<Json> atts = []
+    for int i in range(0, len(ids)):
+        string dir = "data/outbox/" + ids[i]
+        List<string> names = os.list_dir(dir)
+        Json item = { "name": names[0], "content": await os.read_file(dir + "/" + names[0]) }
+        if inline:
+            item["cid"] = ids[i]
+        atts.add(item)
+    return atts
+
+# Retira de Borradores la versión cuyo Message-ID es `message_id` (no pasa nada si ya no está).
+fn void remove_draft(Json conn, string folder, string message_id):
+    if message_id == "":
+        return
+    int uid = must(await imap.find(conn, folder, message_id))
+    if uid > 0:
+        must(await imap.remove(conn, folder, uid))
+
+# Texto plano -> HTML seguro (para la firma de un mensaje enriquecido).
+fn string html_escape(string t):
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+# Todo lo que construye el mensaje a partir del formulario, común a enviar y a guardar borrador.
+fn Json message_from_form(Json acc, string secret, bool draft):
+    string from = quote_name(str(acc["name"])) + " <" + str(acc["email"]) + ">"
+    string body = form("body", "")
+    string sig = str(acc["signature"])
+    string html = form("html", "")   # solo si se redactó en modo enriquecido; `body` es entonces su alternativa de texto
+    if sig != "" and not draft:
+        body = body + "\n\n-- \n" + sig
+        if html != "":
+            html = html + "<br><br>-- <br>" + html_escape(sig)
+    Json smtp = { "host": acc["smtp_host"], "port": acc["smtp_port"], "tls": acc["smtp_tls"], "user": acc["user"] }
+    if acc["auth"] == "password":
+        smtp["password"] = secret
+    else:
+        smtp["token"] = secret
+    return { "from": from, "to": lines_of(form("to", "")), "cc": lines_of(form("cc", "")), "bcc": lines_of(form("bcc", "")),
+             "subject": form("subject", ""), "text": body, "html": html, "in_reply_to": form("in_reply_to", ""),
+             "references": form("references", ""), "attachments": load_attachments(lines_of(form("attachments", "")), false) + load_attachments(lines_of(form("inline", "")), true),
+             "smtp": smtp, "draft": draft }
+
+post endpoint("/api/send"):
+    db_init()
+    int id = int(form("account", "0"))
+    List<Json> accs = await sqlite.query("select * from accounts where id = ?", id)
+    require len(accs) > 0 else status(400)
+    Json acc = accs[0]
+    string secret = await secret_get(id)
+    require secret != "" else status(500)
+    require uploads_ok(lines_of(form("attachments", ""))) else status(400)
+    require inline_ok(lines_of(form("inline", ""))) else status(400)
+    Json msg = message_from_form(acc, secret, false)
+    require len(msg["to"]) + len(msg["cc"]) + len(msg["bcc"]) > 0 else status(400)
+
+    string raw = mail.compose(msg)
+    # bcc no va dentro del mensaje, solo en el sobre
+    must(await mail.send({ "raw": raw, "from": msg["from"], "to": msg["to"], "cc": msg["cc"], "bcc": msg["bcc"], "smtp": msg["smtp"] }))
+
+    # A partir de aquí el correo YA SALIÓ: nada de lo que sigue puede hacer que la petición falle,
+    # o el usuario lo reenviaría. Si algo no sale, se avisa en "warning".
+    string warning = ""
+    List<string> everyone = msg["to"] + msg["cc"] + msg["bcc"]
+    for int i in range(0, len(everyone)):
+        contact_seen(addr_email(everyone[i]), addr_name(everyone[i]))
+    List<string> ids = lines_of(form("attachments", "")) + lines_of(form("inline", ""))
+    for int i in range(0, len(ids)):
+        os.remove_dir("data/outbox/" + ids[i], true)
+    try:
+        Json conn = conn_of(acc, secret)
+        # Gmail ya guarda lo enviado por SMTP; añadirlo lo duplicaría
+        string host = str(acc["imap_host"])
+        Json sent = await folder_of(id, "sent")
+        if sent != null and not host.contains("gmail.com") and not host.contains("googlemail.com"):
+            must(await imap.append(conn, str(sent), raw))
+        Json drafts = await folder_of(id, "drafts")
+        if drafts != null:
+            await remove_draft(conn, str(drafts), form("draft", ""))
+    catch e:
+        warning = "El mensaje se envió, pero no se pudo guardar en Enviados o retirar el borrador: " + e.message
+    return { "ok": true, "warning": warning }
+
+# Sube un adjunto (uno por petición) y devuelve su id para /api/send.
+post endpoint("/api/upload", File file):
+    db_init()
+    require file.size <= 15 * 1024 * 1024 else status(413)
+    string id = hash.random_hex(8)
+    os.make_dir("data/outbox")
+    os.make_dir("data/outbox/" + id)
+    string saved = file.save("data/outbox/" + id)
+    return { "id": id, "name": saved, "size": file.size }
+
+# Saca los adjuntos de un mensaje guardado (borrador que se reabre, reenvío) a la carpeta de subidas,
+# como si se acabaran de subir: devuelve [{id, name, size}] para /api/send y /api/draft.
+post endpoint("/api/message/:id/attachments", int id):
+    db_init()
+    List<Json> rows = await sqlite.query("select account_id, folder_id, uid from messages where id = ?", id)
+    require len(rows) > 0 else status(404)
+    string raw = await os.read_file("data/eml/" + str(rows[0]["account_id"]) + "_" + str(rows[0]["folder_id"]) + "/" + str(rows[0]["uid"]) + ".eml")
+    Json parsed = mailparse.parse(raw)
+    List<Json> found = parsed["attachments"]
+    List<Json> out = []
+    os.make_dir("data/outbox")
+    for int i in range(0, len(found)):
+        # el nombre viene del remitente: se queda con un solo componente de ruta
+        string name = str(found[i]["name"]).replace("/", "_").replace("\\", "_")
+        if name.starts_with("."):
+            name = "_" + name
+        string upload = hash.random_hex(8)
+        os.make_dir("data/outbox/" + upload)
+        await os.write_file("data/outbox/" + upload + "/" + name, mailparse.attachment(raw, int(found[i]["part"])))
+        out.add({ "id": upload, "name": name, "size": found[i]["size"], "cid": found[i]["cid"] })
+    return out

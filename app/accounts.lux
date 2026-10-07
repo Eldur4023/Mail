@@ -1,0 +1,86 @@
+# accounts.lux — alta, listado y color de las cuentas.
+
+get endpoint("/api/accounts"):
+    db_init()
+    return await sqlite.query("select id, name, email, color, signature from accounts order by id")
+
+post endpoint("/api/accounts"):
+    db_init()
+    string password = form("password", "")
+    require form("email", "") != "" and form("imap_host", "") != "" and form("smtp_host", "") != "" and password != "" else status(400)
+    string email = form("email", "")
+    await sqlite.exec("insert into accounts(name, email, color, user, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls) values(?,?,?,?,?,?,?,?,?,?)",
+        form("name", "") == "" ? email : form("name", ""), email, form("color", "") == "" ? "#d97757" : form("color", ""),
+        form("user", "") == "" ? email : form("user", ""),
+        form("imap_host", ""), int(form("imap_port", "") == "" ? "993" : form("imap_port", "")), form("imap_tls", "") == "" ? "tls" : form("imap_tls", ""),
+        form("smtp_host", ""), int(form("smtp_port", "") == "" ? "587" : form("smtp_port", "")), form("smtp_tls", "") == "" ? "starttls" : form("smtp_tls", ""))
+    int id = await sqlite.last_id()
+    bool ok = await secret_set(id, password)
+    if not ok:
+        await sqlite.exec("delete from accounts where id = ?", id)
+        return status(500)
+    return { "id": id }
+
+# Nombre, color y firma; la contraseña solo si se envía una nueva (p. ej. la cambiaste en el servidor).
+post endpoint("/api/accounts/:id/update", int id):
+    db_init()
+    List<Json> found = await sqlite.query("select 1 from accounts where id = ?", id)
+    require len(found) > 0 else status(404)
+    string color = form("color", "")
+    require len(color) == 7 and color.starts_with("#") else status(400)
+    require form("name", "") != "" else status(400)
+    string password = form("password", "")
+    if password != "":
+        bool ok = await secret_set(id, password)
+        require ok else status(500)
+    await sqlite.exec("update accounts set name = ?, color = ?, signature = ? where id = ?", form("name", ""), color, form("signature", ""), id)
+    return status(204)
+
+post endpoint("/api/accounts/:id/color", int id):
+    db_init()
+    require form("color", "").starts_with("#") and len(form("color", "")) == 7 else status(400)
+    await sqlite.exec("update accounts set color = ? where id = ?", form("color", ""), id)
+    return status(204)
+
+post endpoint("/api/accounts/:id/delete", int id):
+    db_init()
+    await sqlite.exec("delete from accounts where id = ?", id)
+    await secret_clear(id)
+    return status(204)
+
+# Prueba los datos de una cuenta SIN guardarla: login y lista de carpetas por IMAP, login por SMTP (no envía nada).
+# Cada parte se prueba por separado para saber cuál falla.
+post endpoint("/api/accounts/test"):
+    string email = form("email", "")
+    string user = form("user", "") == "" ? email : form("user", "")
+    string password = form("password", "")
+    require user != "" and password != "" else status(400)
+    bool imap_ok = false
+    string imap_msg = ""
+    try:
+        Json conn = { "host": form("imap_host", ""), "port": int(form("imap_port", "") == "" ? "993" : form("imap_port", "")),
+                      "tls": form("imap_tls", "") == "" ? "tls" : form("imap_tls", ""), "user": user, "password": password }
+        Json r = await imap.list_folders(conn)
+        string err = native_error(r)
+        if err != "":
+            imap_msg = err
+        else:
+            List<Json> folders = r
+            imap_ok = true
+            imap_msg = str(len(folders)) + " carpetas"
+    catch e:
+        imap_msg = e.message
+    bool smtp_ok = false
+    string smtp_msg = ""
+    try:
+        Json r = await mail.check({ "host": form("smtp_host", ""), "port": form("smtp_port", "") == "" ? "587" : form("smtp_port", ""),
+                           "tls": form("smtp_tls", "") == "" ? "starttls" : form("smtp_tls", ""), "user": user, "password": password })
+        string err = native_error(r)
+        if err != "":
+            smtp_msg = err
+        else:
+            smtp_ok = true
+            smtp_msg = "conexión correcta"
+    catch e:
+        smtp_msg = e.message
+    return { "imap": { "ok": imap_ok, "message": imap_msg }, "smtp": { "ok": smtp_ok, "message": smtp_msg } }

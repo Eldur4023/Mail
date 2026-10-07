@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lux Mail</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="folders">
+    <div class="bar"><button id="new-mail" class="primary">✎ Nuevo</button><button id="sync" title="Sincronizar">⟳</button></div>
+    <nav id="nav"></nav>
+    <div class="bar"><button id="add-account">+ Cuenta</button></div>
+  </aside>
+  <nav id="tabs"></nav>
+  <section id="list">
+    <div class="bar"><input id="search" type="search" placeholder="Buscar en asunto, remitente y texto…"></div>
+    <ul id="messages"></ul>
+  </section>
+  <main id="reader"><p class="empty">Selecciona un mensaje</p></main>
+</div>
+
+<dialog id="update-dialog">
+  <h2>Hay una versión nueva de Lux Mail</h2>
+  <p class="muted">Cambios desde la versión instalada:</p>
+  <ul id="update-commits"></ul>
+  <p id="update-hint" class="muted">Se descarga, se compila y se instala. Tu sistema pedirá la contraseña una vez, para instalar.</p>
+  <pre id="update-log" hidden></pre>
+  <menu><button id="update-later" type="button">Más tarde</button><button id="update-go" type="button" class="primary">Actualizar</button></menu>
+</dialog>
+<dialog id="account-dialog">
+  <form id="account-form" method="dialog">
+    <h2>Añadir cuenta</h2>
+    <label>Nombre <input name="name"></label>
+    <label>Correo <input name="email" type="email" required></label>
+    <label>Usuario <input name="user" placeholder="si no es el correo"></label>
+    <label>Contraseña <input name="password" type="password" required></label>
+    <label>Color <input name="color" type="color" value="#d97757"></label>
+    <fieldset><legend>IMAP</legend>
+      <input name="imap_host" placeholder="imap.ejemplo.com" required>
+      <input name="imap_port" type="number" value="993">
+      <select name="imap_tls"><option value="tls">TLS</option><option value="starttls">STARTTLS</option></select>
+    </fieldset>
+    <fieldset><legend>SMTP</legend>
+      <input name="smtp_host" placeholder="smtp.ejemplo.com" required>
+      <input name="smtp_port" type="number" value="587">
+      <select name="smtp_tls"><option value="starttls">STARTTLS</option><option value="tls">TLS</option></select>
+    </fieldset>
+    <p id="account-error" class="error"></p>
+    <ul id="account-test" class="test-result"></ul>
+    <menu><button type="button" id="account-try">Probar conexión</button><span class="spacer"></span>
+      <button type="button" id="account-cancel">Cancelar</button><button type="submit" class="primary">Guardar</button></menu>
+  </form>
+</dialog>
+<dialog id="settings-dialog">
+  <form id="settings-form" method="dialog">
+    <h2 id="settings-title">Ajustes de cuenta</h2>
+    <label>Nombre <input name="name" required></label>
+    <label>Color <input name="color" type="color"></label>
+    <label class="top">Firma <textarea name="signature" rows="4" placeholder="Se añade al final de lo que envíes (no a los borradores)"></textarea></label>
+    <label>Contraseña <input name="password" type="password" placeholder="vacía = no cambiarla" autocomplete="new-password"></label>
+    <p id="settings-error" class="error"></p>
+    <menu><button type="button" id="settings-delete" class="danger">Quitar cuenta</button>
+      <button type="button" id="settings-cancel">Cancelar</button><button type="submit" class="primary">Guardar</button></menu>
+  </form>
+</dialog>
+
+<dialog id="folder-dialog">
+  <form id="folder-form" method="dialog">
+    <h2 id="folder-title">Nueva carpeta</h2>
+    <label>Nombre <input name="name" required maxlength="100" autocomplete="off"></label>
+    <p id="folder-error" class="error"></p>
+    <menu><button type="button" id="folder-delete" class="danger" hidden>Eliminar carpeta</button>
+      <button type="button" id="folder-cancel">Cancelar</button><button type="submit" class="primary">Guardar</button></menu>
+  </form>
+</dialog>
+
+<dialog id="move-dialog">
+  <h2>Mover a…</h2>
+  <ul id="move-list"></ul>
+  <menu><button type="button" id="move-cancel">Cancelar</button></menu>
+</dialog>
+
+<dialog id="compose-dialog">
+  <form id="compose-form" method="dialog">
+    <label class="from">De
+      <select name="account" id="compose-from"></select>
+    </label>
+    <p id="compose-note" class="note"></p>
+    <label>Para <input name="to" autocomplete="off" placeholder="uno@ejemplo.com, otro@ejemplo.com"></label>
+    <label>Cc <input name="cc" autocomplete="off"></label>
+    <label>Cco <input name="bcc" autocomplete="off"></label>
+    <label>Asunto <input name="subject"></label>
+    <div id="rich-toolbar" hidden>
+      <button type="button" data-cmd="bold" title="Negrita (Ctrl+B)"><b>N</b></button>
+      <button type="button" data-cmd="italic" title="Cursiva (Ctrl+I)"><i>C</i></button>
+      <button type="button" data-cmd="underline" title="Subrayado"><u>S</u></button>
+      <button type="button" data-cmd="insertUnorderedList" title="Lista con viñetas">• Lista</button>
+      <button type="button" data-cmd="insertOrderedList" title="Lista numerada">1. Lista</button>
+      <button type="button" id="rich-link" title="Insertar enlace">🔗 Enlace</button>
+      <button type="button" id="rich-image" title="Insertar imagen">🖼 Imagen</button><input type="file" id="rich-image-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+      <button type="button" data-cmd="removeFormat" title="Quitar formato">Tx</button>
+    </div>
+    <div id="link-row" hidden><input id="link-url" placeholder="https://…" autocomplete="off"><button type="button" id="link-ok">Aceptar</button></div>
+    <textarea name="body" rows="9"></textarea>
+    <div id="compose-rich" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Mensaje" hidden></div>
+    <div class="files"><input type="file" id="compose-files" multiple hidden>
+      <button type="button" id="compose-attach">📎 Adjuntar</button><button type="button" id="compose-mode" title="Alternar entre texto plano y texto enriquecido">Aa Enriquecido</button><span id="compose-filelist"></span></div>
+    <p id="compose-error" class="error"></p>
+    <menu><span class="hint" id="compose-hint">Ctrl+1…9 cuenta · Ctrl+S guarda · Ctrl+Intro envía</span>
+      <button type="button" id="compose-cancel">Descartar</button><button type="button" id="compose-save">Guardar</button><button type="submit" class="primary" id="compose-send">Enviar</button></menu>
+  </form>
+</dialog>
+<div id="toast" role="status" hidden></div>
+<script src="/static/main.js"></script>
+</body>
+</html>

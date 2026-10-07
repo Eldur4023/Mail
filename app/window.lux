@@ -1,0 +1,54 @@
+# window.lux — integración con el escritorio: menú nativo, bandeja y notificaciones.
+#
+# Las acciones del menú son rutas "/menu/..." que el WebKit invoca con fetch dentro
+# de la página; main.js intercepta esas llamadas y las ejecuta en la propia interfaz
+# (nueva redacción, responder...), así que estas rutas del servidor solo existen
+# como respaldo. Solo existe en el binario de escritorio: `lux` a secas no tiene el
+# módulo window (los tests usan tests/window_stub.lux en su lugar).
+
+post endpoint("/api/setup-window"):
+    window.set_menu([
+        { "label": "Archivo", "items": [
+            { "label": "Nuevo mensaje", "action": "/menu/new", "accel": "<Control>n" },
+            { "label": "Sincronizar", "action": "/menu/sync", "accel": "F5" },
+            "-",
+            { "label": "Salir", "action": "/menu/quit", "accel": "<Control>q" }
+        ]},
+        { "label": "Mensaje", "items": [
+            { "label": "Responder", "action": "/menu/reply", "accel": "<Control>r" },
+            { "label": "Responder a todos", "action": "/menu/reply-all", "accel": "<Control><Shift>r" },
+            { "label": "Reenviar", "action": "/menu/forward", "accel": "<Control>l" },
+            "-",
+            { "label": "Archivar", "action": "/menu/archive", "accel": "<Control>e" },
+            { "label": "Eliminar", "action": "/menu/delete", "accel": "<Control>d" },
+            { "label": "Marcar como no leído", "action": "/menu/unseen", "accel": "<Control>u" },
+            { "label": "Spam", "action": "/menu/spam", "accel": "<Control>j" },
+            { "label": "Mover a…", "action": "/menu/move", "accel": "<Control>m" }
+        ]},
+        { "label": "Ir a", "items": [
+            { "label": "Entrada", "action": "/menu/go-inbox", "accel": "<Control>1" },
+            { "label": "Enviados", "action": "/menu/go-sent", "accel": "<Control>2" },
+            { "label": "Buscar", "action": "/menu/search", "accel": "<Control>f" }
+        ]}
+    ])
+    window.set_tray("./icon.png", "Lux Mail")
+    return status(204)
+
+post endpoint("/menu/quit"):
+    window.close()
+    return status(204)
+
+# Respaldo: si el fetch no se interceptara en la página, al menos no es un 404.
+post endpoint("/menu/:accion", string accion):
+    return status(204)
+
+fn void notify_new(int added, string detail):
+    if added > 0:
+        window.notify("Lux Mail", detail)
+
+# Tras actualizar: abre la versión nueva y cierra esta. Sin redirigir, la app nueva
+# hereda nuestra salida y os.run esperaría hasta el timeout, y window.close() no llegaría.
+post endpoint("/api/restart"):
+    await os.run("setsid", ["-f", "sh", "-c", "exec > /dev/null 2>&1 < /dev/null; sleep 1; exec /usr/local/bin/lux-mail"])
+    window.close()
+    return { "ok": true }
