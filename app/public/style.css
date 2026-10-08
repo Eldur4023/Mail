@@ -2,9 +2,10 @@
 
 :root {
   color-scheme: dark;
-  --bg:#262624; --surface:#30302e; --side:#1f1e1d; --fg:#faf9f5; --muted:#b0aea5; --line:#3d3d3a;
-  --sel:#3a2f2a; --accent:#d97757; --accent-hover:#e48a6b; --accent-fg:#1f1e1d;
-  --warn:#e0a458; --danger:#f08a7e;
+  /* paleta de Drive (Drive/app/static/style.css), común a toda la suite */
+  --bg:#141413; --surface:#262523; --side:#1f1e1c; --fg:#f5f3ec; --muted:#a8a397; --line:#33312e;
+  --sel:rgba(217,119,87,.14); --accent:#d97757; --accent-hover:#e48a6b; --accent-fg:#141413;
+  --ok:#86d9a4; --warn:#f5c86a; --danger:#ff9b8a;
   --r:6px;              /* radio de botones y campos */
   --pad:12px;           /* sangría horizontal de paneles */
   --gap:8px;
@@ -92,7 +93,7 @@ button.primary:hover:not(:disabled) { background:var(--accent-hover); border-col
 #reader pre { padding:16px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; background:none; }
 
 /* ── diálogos ─────────────────────────────────────────────────────────────────── */
-dialog { width:min(440px, calc(100vw - 32px)); max-height:calc(100vh - 32px); padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); box-shadow:0 8px 30px rgba(0,0,0,.35); }
+dialog { width:min(440px, calc(100vw - 32px)); max-height:calc(100vh - 32px); padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--side); color:var(--fg); box-shadow:0 8px 30px rgba(0,0,0,.35); }
 dialog[open] { display:flex; flex-direction:column; }
 dialog::backdrop { background:rgba(0,0,0,.55); }
 dialog form { display:grid; gap:var(--gap); min-height:0; overflow:auto; scrollbar-gutter:stable; }
@@ -187,7 +188,7 @@ dialog [hidden] { display:none; }
 
 /* probar conexión */
 .test-result li { padding:2px 0; font-size:13px; }
-.test-result li.ok::before { content:"✔ "; color:#6fbf73; }
+.test-result li.ok::before { content:"✔ "; color:var(--ok); }
 .test-result li.bad::before { content:"✖ "; color:var(--danger); }
 .test-result:empty { display:none; }
 dialog menu .spacer { flex:1; }
