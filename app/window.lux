@@ -42,9 +42,9 @@ post endpoint("/menu/quit"):
 post endpoint("/menu/:accion", string accion):
     return status(204)
 
-fn void notify_new(int added, string detail):
+fn void notify_new(int added, string title, string detail):
     if added > 0:
-        window.notify("Mail", detail)
+        window.notify(title, detail)
 
 # Tras actualizar: abre la versión nueva y cierra esta. Sin redirigir, la app nueva
 # hereda nuestra salida y os.run esperaría hasta el timeout, y window.close() no llegaría.

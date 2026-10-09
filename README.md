@@ -60,10 +60,11 @@ contraseñas van al Android Keystore en lugar de `secret-tool`. El proyecto Grad
 
 Probado en un emulador (Android 14, x86_64) contra los servidores IMAP/SMTP falsos de `tests/`: sincroniza, lista, abre, responde con la
 navegación del móvil (cajón de carpetas, «atrás» cierra diálogo/pestaña) y envía. Sin probar en un teléfono real (arm64), con un servidor
-real (TLS) ni con los adjuntos del selector de archivos. Un servicio en primer plano (`SyncService`, con su aviso fijo «Buscando correo nuevo») mantiene vivo el servidor y llama a
-`/api/sync` cada 3 minutos con la app cerrada; el aviso de correo nuevo es `window.notify` → notificación de Android. Se arranca al abrir la
-app y al reiniciar el móvil, y pide la excepción de ahorro de batería la primera vez. Sin IDLE (libcurl no lo tiene) es sondeo con alarmas:
-en Doze profundo Android puede retrasarlas varios minutos.
+real (TLS) ni con los adjuntos del selector de archivos. Sincroniza con la app cerrada, sin servicio en primer plano ni notificación fija: una cadena de alarmas que despiertan el móvil llama a
+`/api/sync` cada 2 minutos (`Sync.kt`); el aviso de correo nuevo es `window.notify` → notificación de Android. Se arranca al abrir la app y al
+reiniciar, y pide la excepción de ahorro de batería la primera vez. Sin IDLE (libcurl no lo tiene) es sondeo: con el acceso especial
+«Alarmas y recordatorios» la alarma es exacta; en Doze profundo Android puede espaciarlas hasta ~9 minutos. (Se probó antes `JobScheduler`:
+su temporizador no despierta el dispositivo y tardaba más de 2 minutos.)
 
 ## Teclado
 

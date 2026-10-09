@@ -187,6 +187,10 @@ fn int sync_folder(Json conn, int account_id, int folder_id, string path, string
                 int(ids[0]["id"]), m["subject"], str(m["from"]) + " " + str(m["to"]), body)
         if role != "sent" and role != "drafts":
             contact_seen(str(m["from_email"]), name)
+        # Para el aviso de correo nuevo: remitente y asunto de lo que llega sin leer (no la primera descarga de una carpeta).
+        if last_uid > 0 and seen == 0 and role != "sent" and role != "drafts" and role != "trash" and role != "junk":
+            string subj = str(m["subject"]).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+            state.set("newmail", str(state.get("newmail", "")) + name.replace("\n", " ").replace("\t", " ") + "\t" + subj + "\n")
         if uid > top:
             top = uid
         added = added + 1
@@ -245,13 +249,32 @@ post endpoint("/api/sync"):
     if running != "" and time.now_seconds() - int(running) < 300:
         return { "busy": true }
     state.set("syncing", str(time.now_seconds()))
+    state.set("newmail", "")
     int total = 0
-    int notify = 0
     List<Json> accs = await sqlite.query("select id from accounts order by id")
     for int i in range(0, len(accs)):
         Json r = await sync_account(int(accs[i]["id"]))
         total = total + int(r["total"])
-        notify = notify + int(r["notify"])
     state.set("syncing", "")
-    notify_new(notify, str(notify) + (notify == 1 ? " mensaje nuevo" : " mensajes nuevos"))
+    announce_new(lines_of(str(state.get("newmail", ""))))
+    state.set("newmail", "")
     return { "added": total }
+
+# Un solo correo: remitente como título y asunto como texto. Varios: "N mensajes nuevos" y quién los envía.
+fn void announce_new(List<string> lines):
+    if len(lines) == 0:
+        return
+    if len(lines) == 1:
+        List<string> one = lines[0].split("\t")
+        string subject = len(one) > 1 ? one[1].trim() : ""
+        notify_new(1, one[0], subject == "" ? "(sin asunto)" : subject)
+        return
+    string who = ""
+    int names = 0
+    for int i in range(0, len(lines)):
+        string n = lines[i].split("\t")[0]
+        if not who.contains(n):
+            names = names + 1
+            if names <= 3:
+                who = who + (who == "" ? "" : ", ") + n
+    notify_new(len(lines), str(len(lines)) + " mensajes nuevos", who + (names > 3 ? " y otros" : ""))

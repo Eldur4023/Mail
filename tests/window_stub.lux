@@ -1,3 +1,7 @@
 # Sustituye a app/window.lux en los tests: el binario `lux` no tiene el módulo window.
-fn void notify_new(int added, string detail):
-    return
+# Deja lo que se habría notificado en data/notified.txt (título|texto, una línea por aviso) para que el test lo compruebe.
+fn void notify_new(int added, string title, string detail):
+    if added > 0:
+        os.make_dir("data")
+        string prev = os.path_exists("data/notified.txt") ? await os.read_file("data/notified.txt") : ""
+        await os.write_file("data/notified.txt", prev + title + "|" + detail + "\n")

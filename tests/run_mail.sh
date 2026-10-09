@@ -307,4 +307,13 @@ check "$(code /api/message/$NM/move to=archive scope=thread)" '500' "el servidor
 check "$(curl -s -m 5 "localhost:$WEB/api/messages?role=inbox&account=1")" '"subject":"No se mueve"' "...y el mensaje sigue en la Entrada (lo local no se toca)"
 exec 3<>/dev/tcp/127.0.0.1/$IMAP; printf 'x X-TEST OK MOVE\r\nx X-TEST OK COPY\r\n' >&3; sleep 0.3; exec 3>&-
 check "$(code /api/message/$NM/move to=archive scope=thread)" '204' "con el servidor de nuevo bien, el mismo movimiento funciona"
+# ── avisos de correo nuevo: un solo correo = remitente + asunto; varios = recuento y remitentes ──
+curl -s -m 60 -XPOST localhost:$WEB/api/sync >/dev/null
+add 900 "$(printf 'From: Ana Gil <ana@z.com>\r\nMessage-ID: <n1@x>\r\nSubject: Presupuesto\r\nDate: Tue, 06 Oct 2026 13:00:00 +0000\r\n\r\ntexto\r\n')"
+curl -s -m 60 -XPOST localhost:$WEB/api/sync >/dev/null
+check "$(cat "$T/app/data/notified.txt" 2>/dev/null)" 'p@x.com|Otra cosa' "aviso con un solo correo: remitente como título y asunto como texto"
+add 901 "$(printf 'From: Ana Gil <ana@z.com>\r\nMessage-ID: <n2@x>\r\nSubject: Uno\r\nDate: Tue, 06 Oct 2026 13:01:00 +0000\r\n\r\nt\r\n')"
+add 902 "$(printf 'From: Luis <luis@z.com>\r\nMessage-ID: <n3@x>\r\nSubject: Dos\r\nDate: Tue, 06 Oct 2026 13:02:00 +0000\r\n\r\nt\r\n')"
+curl -s -m 60 -XPOST localhost:$WEB/api/sync >/dev/null
+check "$(tail -n 1 "$T/app/data/notified.txt" 2>/dev/null)" '4 mensajes nuevos|Ana Gil, Luis' "aviso con varios correos (2 cuentas × 2): recuento y remitentes sin repetir"
 exit $fail
