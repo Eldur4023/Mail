@@ -8,6 +8,7 @@
 //
 // `service` and `key` identify the entry (attributes "service" and "account" in secret-tool).
 #include <lux_script/builtin_module.hpp>
+#include <lux_script/keyring_control.hpp>
 
 #include <spawn.h>
 #include <sys/wait.h>
@@ -20,6 +21,8 @@
 extern char** environ;
 
 namespace lux_script {
+
+KeyringControl& keyring_control() { static KeyringControl c; return c; }
 
 namespace {
 
@@ -80,6 +83,7 @@ Value fn_set(NativeCtx&, std::vector<Value>& a, std::string& error) {
         error = "keyring.set(): the secret must be a non-empty string";
         return Value::null();
     }
+    if (const auto& c = keyring_control(); c.set) return Value::boolean(c.set(a[0].as_str(), a[1].as_str(), a[2].as_str()));
     bool ok;
     run({"secret-tool", "store", "--label=" + a[0].as_str() + " " + a[1].as_str(), "service", a[0].as_str(), "account", a[1].as_str()},
         a[2].as_str(), ok, error, "keyring.set");
@@ -88,6 +92,10 @@ Value fn_set(NativeCtx&, std::vector<Value>& a, std::string& error) {
 
 Value fn_get(NativeCtx&, std::vector<Value>& a, std::string& error) {
     if (!valid(a[0], a[1], "keyring.get", error)) return Value::null();
+    if (const auto& c = keyring_control(); c.get) {
+        auto v = c.get(a[0].as_str(), a[1].as_str());
+        return Value::str(v ? *v : "");
+    }
     bool ok;
     std::string v = run({"secret-tool", "lookup", "service", a[0].as_str(), "account", a[1].as_str()}, "", ok, error, "keyring.get");
     return error.empty() ? Value::str(ok ? v : "") : Value::null();
@@ -95,6 +103,7 @@ Value fn_get(NativeCtx&, std::vector<Value>& a, std::string& error) {
 
 Value fn_delete(NativeCtx&, std::vector<Value>& a, std::string& error) {
     if (!valid(a[0], a[1], "keyring.delete", error)) return Value::null();
+    if (const auto& c = keyring_control(); c.del) return Value::boolean(c.del(a[0].as_str(), a[1].as_str()));
     bool ok;
     run({"secret-tool", "clear", "service", a[0].as_str(), "account", a[1].as_str()}, "", ok, error, "keyring.delete");
     return error.empty() ? Value::boolean(ok) : Value::null();

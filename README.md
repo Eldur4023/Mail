@@ -49,6 +49,22 @@ La contraseña la pide el diálogo del sistema (polkit), una vez y solo para ins
 Registro en `~/.cache/mail-update.log`. Al terminar, **Reiniciar Mail** abre la versión nueva y cierra la anterior.
 `./deploy/install.sh --uninstall` lo quita sin tocar tus correos.
 
+## Android
+
+El mismo servidor Lux corre dentro de la APK (`src/android.cpp` → `libluxlocal.so`) y un `WebView` carga la interfaz por loopback; las
+contraseñas van al Android Keystore en lugar de `secret-tool`. El proyecto Gradle está en `android/`.
+
+    export ANDROID_NDK=...                                   # r26+, API mínima 28
+    tools/android-build.sh arm64-v8a x86_64                  # OpenSSL + curl + SQLite + libluxlocal.so por ABI
+    cd android && gradle assembleDebug                       # JDK 17, Gradle 8.7, SDK 34 (sdk.dir en local.properties)
+
+Probado en un emulador (Android 14, x86_64) contra los servidores IMAP/SMTP falsos de `tests/`: sincroniza, lista, abre, responde con la
+navegación del móvil (cajón de carpetas, «atrás» cierra diálogo/pestaña) y envía. Sin probar en un teléfono real (arm64), con un servidor
+real (TLS) ni con los adjuntos del selector de archivos. Un servicio en primer plano (`SyncService`, con su aviso fijo «Buscando correo nuevo») mantiene vivo el servidor y llama a
+`/api/sync` cada 3 minutos con la app cerrada; el aviso de correo nuevo es `window.notify` → notificación de Android. Se arranca al abrir la
+app y al reiniciar el móvil, y pide la excepción de ahorro de batería la primera vez. Sin IDLE (libcurl no lo tiene) es sondeo con alarmas:
+en Doze profundo Android puede retrasarlas varios minutos.
+
 ## Teclado
 
 `j`/`k` o `↓`/`↑` moverse por la lista · `Intro` abrir en pestaña · `w` o `Esc` cerrar pestaña · `[` `]` cambiar de pestaña · `x` marcar · `/` buscar · `c` redactar · `r` responder · `a` responder a todos · `f` reenviar · `e` archivar · `!` spam · `m` mover · `u` no leído · `Supr` eliminar · `?` ayuda · `Esc` cancelar. En la redacción: `Ctrl+S` guarda, `Ctrl+Intro` envía, `Ctrl+1…9` cambia de cuenta.

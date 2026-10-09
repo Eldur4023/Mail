@@ -27,6 +27,7 @@
 #include <lux/percent_encoding.hpp>
 
 #include <curl/curl.h>
+#include <lux_script/curl_init.hpp>
 
 #include <algorithm>
 #include <fstream>
@@ -282,7 +283,7 @@ Value fn_send(NativeCtx&, std::vector<Value>& a, std::string& error) {
     std::vector<std::string> rcpts;
     if (!build_message(m, cfg, "mail.send", msg, env_from, rcpts, error)) return Value::null();
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = lux_curl_init();
     if (!curl) { error = "mail.send(): could not initialize"; return Value::null(); }
     curl_slist* rcpt = nullptr;
     for (const auto& r : rcpts) rcpt = curl_slist_append(rcpt, envelope(r).c_str());
@@ -316,7 +317,7 @@ Value fn_check(NativeCtx&, std::vector<Value>& a, std::string& error) {
     wrapper["smtp"] = a[0];
     Config cfg;
     if (!resolve_config(wrapper, "mail.check", cfg, error)) return Value::null();
-    CURL* curl = curl_easy_init();
+    CURL* curl = lux_curl_init();
     if (!curl) { error = "mail.check(): could not initialize"; return Value::null(); }
     char err[CURL_ERROR_SIZE] = "";
     curl_easy_setopt(curl, CURLOPT_URL, cfg.url.c_str());

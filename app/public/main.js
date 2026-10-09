@@ -993,8 +993,41 @@ $("#update-go").onclick = async () => {
   }, 1500);
 };
 
+// ---- móvil: cajón de carpetas y "atrás" (el Activity de Android llama a luxBack) ---------------
+const drawer = (on) => $("#app").classList.toggle("drawer", on);
+$("#menu-btn").onclick = () => drawer(true);
+$("#app").addEventListener("click", (e) => { if (e.target === $("#app") || e.target.closest("#nav a, #new-mail, #sync, #add-account")) drawer(false); });
+// Deslizar a la derecha abre el cajón; a la izquierda lo cierra. Se ignora sobre campos, pestañas (que se desplazan)
+// y diálogos, y se exige un gesto claramente horizontal (el desplazamiento vertical de la lista no lo dispara).
+let swipe = null;
+document.addEventListener("touchstart", (e) => {
+  const t = e.touches[0];
+  swipe = e.touches.length === 1 && !e.target.closest("input, textarea, select, #tabs, dialog[open], [contenteditable]") ? { x: t.clientX, y: t.clientY } : null;
+}, { passive: true });
+document.addEventListener("touchend", (e) => {
+  if (!swipe) return;
+  const t = e.changedTouches[0], dx = t.clientX - swipe.x, dy = t.clientY - swipe.y, open = $("#app").classList.contains("drawer");
+  if (Math.abs(dx) > 70 && Math.abs(dy) < Math.abs(dx) * 0.5 && matchMedia("(max-width:700px)").matches) {
+    if (dx > 0 && !open && swipe.x < innerWidth * 0.6) drawer(true);
+    else if (dx < 0 && open) drawer(false);
+  }
+  swipe = null;
+}, { passive: true });
+window.luxBack = () => {
+  const dlg = document.querySelector("dialog[open]");
+  if (dlg) { dlg.close(); return true; }
+  if ($("#app").classList.contains("drawer")) { drawer(false); return true; }
+  if (state.selected.size) { clearSelection(); return true; }
+  if (state.tab) { closeTab(state.tab); return true; }
+  return false;
+};
+
 renderTabs();
 api("/api/safe-domains").then((r) => { state.safe = new Set(r.map((x) => x.domain)); }).catch(() => {});
 refreshAll().then(sync);
 checkUpdate();
-setInterval(sync, 3 * 60 * 1000);   // ponytail: sondeo cada 3 min; IMAP IDLE no está disponible con libcurl
+// En la APK sincroniza un servicio en segundo plano (SyncService), también con la app cerrada: aquí solo se repinta.
+if (/; wv\)/.test(navigator.userAgent)) {
+  setInterval(refreshAll, 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
+} else setInterval(sync, 3 * 60 * 1000);   // ponytail: sondeo cada 3 min; IMAP IDLE no está disponible con libcurl
