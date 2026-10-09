@@ -1,10 +1,12 @@
 # accounts.lux — alta, listado y color de las cuentas.
 
 get endpoint("/api/accounts"):
+    require api_ok() else status(401)
     db_init()
     return await sqlite.query("select id, name, email, color, signature from accounts order by id")
 
 post endpoint("/api/accounts"):
+    require api_ok() else status(401)
     db_init()
     string password = form("password", "")
     require form("email", "") != "" and form("imap_host", "") != "" and form("smtp_host", "") != "" and password != "" else status(400)
@@ -23,6 +25,7 @@ post endpoint("/api/accounts"):
 
 # Nombre, color y firma; la contraseña solo si se envía una nueva (p. ej. la cambiaste en el servidor).
 post endpoint("/api/accounts/:id/update", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> found = await sqlite.query("select 1 from accounts where id = ?", id)
     require len(found) > 0 else status(404)
@@ -37,12 +40,14 @@ post endpoint("/api/accounts/:id/update", int id):
     return status(204)
 
 post endpoint("/api/accounts/:id/color", int id):
+    require api_ok() else status(401)
     db_init()
     require form("color", "").starts_with("#") and len(form("color", "")) == 7 else status(400)
     await sqlite.exec("update accounts set color = ? where id = ?", form("color", ""), id)
     return status(204)
 
 post endpoint("/api/accounts/:id/delete", int id):
+    require api_ok() else status(401)
     db_init()
     await sqlite.exec("delete from accounts where id = ?", id)
     await secret_clear(id)
@@ -51,6 +56,7 @@ post endpoint("/api/accounts/:id/delete", int id):
 # Prueba los datos de una cuenta SIN guardarla: login y lista de carpetas por IMAP, login por SMTP (no envía nada).
 # Cada parte se prueba por separado para saber cuál falla.
 post endpoint("/api/accounts/test"):
+    require api_ok() else status(401)
     string email = form("email", "")
     string user = form("user", "") == "" ? email : form("user", "")
     string password = form("password", "")

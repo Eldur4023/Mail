@@ -66,6 +66,15 @@ reiniciar, y pide la excepción de ahorro de batería la primera vez. Sin IDLE (
 «Alarmas y recordatorios» la alarma es exacta; en Doze profundo Android puede espaciarlas hasta ~9 minutos. (Se probó antes `JobScheduler`:
 su temporizador no despierta el dispositivo y tardaba más de 2 minutos.)
 
+## Seguridad de la API local
+
+El servidor escucha solo en `127.0.0.1` (el arranque se niega a empezar si `app.lux` no declara `host "127.0.0.1"`), pero otras apps del teléfono —o
+otro usuario del equipo— pueden abrir ese puerto, y esa API lee y manda tu correo. Por eso **toda la API exige el secreto de `api-token`**
+(cabecera `X-Mail-Token`; `app/secret.lux`): un fichero modo 600 en la carpeta de datos de la app que se crea antes de abrir el puerto. Quien abre la
+página —la ventana de escritorio o la actividad de Android— lo lee de ahí y se lo pasa en `#t=…` (el fragmento no viaja al servidor); `main.js`
+lo pone en cada petición, y la alarma de fondo de Android lo envía igual. Sin él o con otro: 401. La página `/` y las imágenes subidas desde el
+editor (`/outbox/<id aleatorio>`) no lo exigen. Se prueba en `tests/run_mail.sh`.
+
 ## Teclado
 
 `j`/`k` o `↓`/`↑` moverse por la lista · `Intro` abrir en pestaña · `w` o `Esc` cerrar pestaña · `[` `]` cambiar de pestaña · `x` marcar · `/` buscar · `c` redactar · `r` responder · `a` responder a todos · `f` reenviar · `e` archivar · `!` spam · `m` mover · `u` no leído · `Supr` eliminar · `?` ayuda · `Esc` cancelar. En la redacción: `Ctrl+S` guarda, `Ctrl+Intro` envía, `Ctrl+1…9` cambia de cuenta.

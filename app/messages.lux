@@ -14,6 +14,7 @@ fn string fts_query(string q):
 # role = inbox|sent|drafts|trash|junk|archive; account = 0 para todas; q = búsqueda de texto completo
 # (asunto, remitente y cuerpo, sin distinguir acentos ni mayúsculas).
 get endpoint("/api/messages"):
+    require api_ok() else status(401)
     db_init()
     string role = query("role", "inbox")
     int account = int(query("account", "0"))
@@ -46,6 +47,7 @@ get endpoint("/api/messages"):
         """, fts, folder, folder, folder, role, account, account)
 
 get endpoint("/api/folders"):
+    require api_ok() else status(401)
     db_init()
     return await sqlite.query("""
         select f.id, f.account_id, f.path, f.role, (select count(*) from messages m where (f.role = 'inbox' or f.role is null) and m.folder_id = f.id and m.seen = 0) as unseen
@@ -53,6 +55,7 @@ get endpoint("/api/folders"):
         """)
 
 get endpoint("/api/message/:id", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> rows = await sqlite.query("""
         select m.*, f.path, f.role, a.color, a.email as account_email from messages m
@@ -71,6 +74,7 @@ get endpoint("/api/message/:id", int id):
 # Todos los mensajes de la conversación del mensaje `id` (de cualquier carpeta de su cuenta), del más
 # antiguo al más reciente.
 get endpoint("/api/thread/:id", int id):
+    require api_ok() else status(401)
     db_init()
     return await sqlite.query("""
         select t.id, t.subject, t.from_name, t.from_email, t.date, t.seen, f.role
@@ -80,6 +84,7 @@ get endpoint("/api/thread/:id", int id):
         """, id)
 
 post endpoint("/api/message/:id/seen", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> rows = await sqlite.query("select m.account_id, m.uid, m.seen, f.path from messages m join folders f on f.id = m.folder_id where m.id = ?", id)
     require len(rows) > 0 else status(404)
@@ -104,10 +109,12 @@ post endpoint("/api/message/:id/seen", int id):
 
 # Dominios de remitentes seguros para imágenes.
 get endpoint("/api/safe-domains"):
+    require api_ok() else status(401)
     db_init()
     return await sqlite.query("select domain from safe_domains order by domain")
 
 post endpoint("/api/safe-domain"):
+    require api_ok() else status(401)
     db_init()
     string domain = form("domain", "").trim().lower()
     require domain != "" and len(domain) <= 253 and not domain.contains(" ") and not domain.contains("@") else status(400)

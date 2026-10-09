@@ -24,6 +24,7 @@ fn Json git(string repo, List<string> args):
     return await os.run("env", argv)
 
 get endpoint("/api/update"):
+    require api_ok() else status(401)
     string repo = await source_repo()
     if repo == "" or not os.is_dir(repo):
         return { "available": false, "error": "instalación sin repositorio de origen (reinstala con deploy/install.sh)" }
@@ -47,6 +48,7 @@ get endpoint("/api/update"):
     return { "available": len(commits) > 0, "commits": commits }
 
 post endpoint("/api/update"):
+    require api_ok() else status(401)
     string repo = await source_repo()
     require repo != "" else status(400)
     os.make_dir(os.path_dirname(update_log()))
@@ -56,6 +58,7 @@ post endpoint("/api/update"):
     return { "ok": true }
 
 get endpoint("/api/update/log"):
+    require api_ok() else status(401)
     if not os.path_exists(update_log()):
         return { "state": "idle", "log": "" }
     string text = await os.read_file(update_log())

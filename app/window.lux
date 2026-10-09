@@ -7,6 +7,7 @@
 # módulo window (los tests usan tests/window_stub.lux en su lugar).
 
 post endpoint("/api/setup-window"):
+    require api_ok() else status(401)
     window.set_menu([
         { "label": "Archivo", "items": [
             { "label": "Nuevo mensaje", "action": "/menu/new", "accel": "<Control>n" },
@@ -35,11 +36,13 @@ post endpoint("/api/setup-window"):
     return status(204)
 
 post endpoint("/menu/quit"):
+    require api_ok() else status(401)
     window.close()
     return status(204)
 
 # Respaldo: si el fetch no se interceptara en la página, al menos no es un 404.
 post endpoint("/menu/:accion", string accion):
+    require api_ok() else status(401)
     return status(204)
 
 fn void notify_new(int added, string title, string detail):
@@ -49,6 +52,7 @@ fn void notify_new(int added, string title, string detail):
 # Tras actualizar: abre la versión nueva y cierra esta. Sin redirigir, la app nueva
 # hereda nuestra salida y os.run esperaría hasta el timeout, y window.close() no llegaría.
 post endpoint("/api/restart"):
+    require api_ok() else status(401)
     await os.run("setsid", ["-f", "sh", "-c", "exec > /dev/null 2>&1 < /dev/null; sleep 1; exec /usr/local/bin/mail-desktop"])
     window.close()
     return { "ok": true }

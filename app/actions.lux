@@ -69,6 +69,7 @@ fn string move_one(int id, string to, int folder_id, string scope):
     return ""
 
 post endpoint("/api/message/:id/move", int id):
+    require api_ok() else status(401)
     db_init()
     string err = await move_one(id, form("to", ""), int(form("folder_id", "0")), form("scope", "message"))
     if err != "":
@@ -78,6 +79,7 @@ post endpoint("/api/message/:id/move", int id):
 # Varios a la vez: ids (uno por línea, el id de la fila de cada conversación) + los mismos campos de arriba.
 # Siempre por conversación. Devuelve cuántos se movieron y cuántos fallaron; un fallo no detiene el resto.
 post endpoint("/api/messages/move"):
+    require api_ok() else status(401)
     db_init()
     List<string> ids = lines_of(form("ids", ""))
     require len(ids) > 0 else status(400)
@@ -96,6 +98,7 @@ post endpoint("/api/messages/move"):
 # Leído / no leído en lote (seen = 1 | 0). Leído: toda la conversación, pendiente de enviarse al servidor con el
 # siguiente sync. No leído: el mensaje de la fila (el más reciente), enviado ya.
 post endpoint("/api/messages/seen"):
+    require api_ok() else status(401)
     db_init()
     List<string> ids = lines_of(form("ids", ""))
     require len(ids) > 0 else status(400)
@@ -120,6 +123,7 @@ post endpoint("/api/messages/seen"):
     return { "done": done }
 
 post endpoint("/api/message/:id/unseen", int id):
+    require api_ok() else status(401)
     db_init()
     Json ctx = await message_ctx(id)
     require ctx != null else status(404)

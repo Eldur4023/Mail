@@ -36,6 +36,13 @@ object Sync {
     // On app start and after boot/update: only if no alarm is pending (a pending PendingIntent is our marker).
     fun ensureScheduled(c: Context) { if (intent(c, PendingIntent.FLAG_NO_CREATE) == null) schedule(c) }
 
+    // The local API's secret: the Lux app creates this file before it starts listening (app/secret.lux); it is private to this app.
+    fun token(c: Context): String {
+        val f = java.io.File(c.filesDir, "api-token")
+        for (i in 0 until 100) { if (f.exists() && f.length() > 0) return f.readText().trim(); Thread.sleep(100) }
+        return ""
+    }
+
     // Runs on the calling thread: start the server (idempotent) and ask it to sync.
     fun syncNow(c: Context) {
         LuxLocal.appContext = c.applicationContext
@@ -43,6 +50,7 @@ object Sync {
             val port = LuxLocal.start(c.filesDir.path)
             if (port > 0) (URL("http://127.0.0.1:$port/api/sync").openConnection() as HttpURLConnection).run {
                 requestMethod = "POST"; connectTimeout = 10_000; readTimeout = 45_000
+                setRequestProperty("X-Mail-Token", token(c))
                 setRequestProperty("Connection", "close")   // a pooled keep-alive socket outlives Lux's idle timeout -> 408
                 try {
                     val ok = responseCode < 400

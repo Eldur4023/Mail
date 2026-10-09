@@ -1,4 +1,16 @@
 // main.js — carpetas | pestañas (Bandeja + un correo por pestaña). Todo texto externo se inserta con textContent.
+// El secreto de la API local llega en la URL como #t=… (lo pone el shell: ventana de escritorio o actividad de Android);
+// todas las peticiones a /api (y /menu) lo llevan en X-Mail-Token. Sin él el servidor responde 401.
+const TOKEN = (() => {
+  const m = /[#&]t=([^&]+)/.exec(location.hash);
+  try { if (m) { sessionStorage.setItem("mailTok", m[1]); history.replaceState(null, "", location.pathname + location.search); } return sessionStorage.getItem("mailTok") || ""; }
+  catch { return m ? m[1] : ""; }
+})();
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  if (typeof url === "string" && url.startsWith("/") && TOKEN) opts = { ...opts, headers: { ...(opts.headers || {}), "X-Mail-Token": TOKEN } };
+  return nativeFetch(url, opts);
+};
 const $ = (s) => document.querySelector(s);
 const state = { safe: new Set(), tab: 0, role: "inbox", account: 0, q: "", sel: 0, selThread: "", selAccount: 0, folder: 0, rows: [], selected: new Map(), anchor: -1, accounts: [], folders: [] };
 const ROLES = [["inbox", "Entrada"], ["sent", "Enviados"], ["drafts", "Borradores"], ["archive", "Archivo"], ["junk", "Spam"], ["trash", "Papelera"]];

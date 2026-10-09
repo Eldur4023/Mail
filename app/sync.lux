@@ -243,6 +243,7 @@ fn Json sync_account(int account_id):
 
 # Sincroniza una cuenta, o todas si no se indica. Un solo sync a la vez.
 post endpoint("/api/sync"):
+    require api_ok() else status(401)
     db_init()
     # marca de tiempo, no un simple "1": si un sync falla a medias no debe bloquear a los siguientes
     string running = state.get("syncing", "")

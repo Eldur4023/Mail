@@ -19,6 +19,10 @@ cp -r app "$T/app"; rm -rf "$T/app/data"; cd "$T/app"
 cp ../tests/window_stub.lux window.lux 2>/dev/null || cp "$OLDPWD/tests/window_stub.lux" window.lux
 sed -i '/^import window$/d; /^    window:$/,/^        icon /d' app.lux
 MAIL_OPT="$T/sin-instalar" PATH="$T/bin:$PATH" "$LUX" . --port $WEB >"$T/srv.log" 2>&1 & sleep 2
+# La API exige el secreto de api-token (X-Mail-Token): todas las llamadas de la prueba lo llevan.
+for _ in $(seq 50); do [ -s "$T/app/api-token" ] && break; sleep 0.2; done
+TOKEN=$(cat "$T/app/api-token")
+curl() { command curl -H "X-Mail-Token: $TOKEN" "$@"; }
 fail=0
 check() { if grep -qF -- "$2" <<<"$1"; then echo "ok   $3"; else echo "FAIL $3: wanted [$2]"; fail=1; fi; }
 acct() { curl -s -m 10 -XPOST localhost:$WEB/api/accounts -d "name=$1&email=$2&password=pw&color=%23$3&imap_host=127.0.0.1&imap_port=$IMAP&imap_tls=none&smtp_host=127.0.0.1&smtp_port=$SMTP&smtp_tls=none"; }
@@ -318,4 +322,11 @@ add 901 "$(printf 'From: Ana Gil <ana@z.com>\r\nMessage-ID: <n2@x>\r\nSubject: U
 add 902 "$(printf 'From: Luis <luis@z.com>\r\nMessage-ID: <n3@x>\r\nSubject: Dos\r\nDate: Tue, 06 Oct 2026 13:02:00 +0000\r\n\r\nt\r\n')"
 curl -s -m 60 -XPOST localhost:$WEB/api/sync >/dev/null
 check "$(tail -n 1 "$T/app/data/notified.txt" 2>/dev/null)" '4 mensajes nuevos|Ana Gil, Luis' "aviso con varios correos (2 cuentas × 2): recuento y remitentes sin repetir"
+# ── secreto de la API local ──
+check "$(stat -c %a "$T/app/api-token")" 600 "api-token con modo 600"
+check "$(command curl -s -o /dev/null -w '%{http_code}' -m 5 localhost:$WEB/api/accounts)" 401 "sin secreto: 401"
+check "$(command curl -s -o /dev/null -w '%{http_code}' -m 5 -H 'X-Mail-Token: otro' localhost:$WEB/api/accounts)" 401 "secreto equivocado: 401"
+check "$(command curl -s -o /dev/null -w '%{http_code}' -m 5 -XPOST localhost:$WEB/api/sync)" 401 "sin secreto no se sincroniza"
+check "$(command curl -s -o /dev/null -w '%{http_code}' -m 5 localhost:$WEB/)" 200 "la página se sirve sin secreto"
+check "$(curl -s -o /dev/null -w '%{http_code}' -m 5 localhost:$WEB/api/accounts)" 200 "con el secreto: 200"
 exit $fail

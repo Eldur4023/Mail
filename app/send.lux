@@ -106,6 +106,7 @@ fn Json message_from_form(Json acc, string secret, bool draft):
              "smtp": smtp, "draft": draft }
 
 post endpoint("/api/send"):
+    require api_ok() else status(401)
     db_init()
     int id = int(form("account", "0"))
     List<Json> accs = await sqlite.query("select * from accounts where id = ?", id)
@@ -147,6 +148,7 @@ post endpoint("/api/send"):
 
 # Sube un adjunto (uno por petición) y devuelve su id para /api/send.
 post endpoint("/api/upload", File file):
+    require api_ok() else status(401)
     db_init()
     require file.size <= 15 * 1024 * 1024 else status(413)
     string id = hash.random_hex(8)
@@ -158,6 +160,7 @@ post endpoint("/api/upload", File file):
 # Saca los adjuntos de un mensaje guardado (borrador que se reabre, reenvío) a la carpeta de subidas,
 # como si se acabaran de subir: devuelve [{id, name, size}] para /api/send y /api/draft.
 post endpoint("/api/message/:id/attachments", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> rows = await sqlite.query("select account_id, folder_id, uid from messages where id = ?", id)
     require len(rows) > 0 else status(404)

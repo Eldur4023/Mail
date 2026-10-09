@@ -46,7 +46,9 @@ class MainActivity : Activity() {
         // start() is idempotent: if this process already runs the server (the Activity was only recreated), it returns its port.
         Thread {
             val port = LuxLocal.start(filesDir.path)
-            runOnUiThread { if (port < 0) finish() else web.loadUrl("http://127.0.0.1:$port/") }
+            val token = if (port > 0) Sync.token(this) else ""
+            // The secret rides in the fragment (never sent to the server); main.js puts it on every request.
+            runOnUiThread { if (port < 0) finish() else web.loadUrl("http://127.0.0.1:$port/#t=$token") }
         }.start()
     }
 

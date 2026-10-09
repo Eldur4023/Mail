@@ -9,6 +9,7 @@ fn bool folder_name_ok(string name):
     return true
 
 post endpoint("/api/folders"):
+    require api_ok() else status(401)
     db_init()
     int account = int(form("account", "0"))
     string name = form("name", "").trim()
@@ -22,6 +23,7 @@ post endpoint("/api/folders"):
     return status(204)
 
 post endpoint("/api/folders/:id/rename", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> rows = await sqlite.query("select account_id, path, role from folders where id = ?", id)
     require len(rows) > 0 else status(404)
@@ -39,6 +41,7 @@ post endpoint("/api/folders/:id/rename", int id):
 
 # Borrar una carpeta propia borra también sus mensajes en el servidor (es lo que hace IMAP).
 post endpoint("/api/folders/:id/delete", int id):
+    require api_ok() else status(401)
     db_init()
     List<Json> rows = await sqlite.query("select account_id, path, role from folders where id = ?", id)
     require len(rows) > 0 else status(404)

@@ -25,6 +25,7 @@ fn void contact_seen(string email, string name):
         """, email, name)
 
 get endpoint("/api/contacts"):
+    require api_ok() else status(401)
     db_init()
     string q = "%" + query("q", "") + "%"
     return await sqlite.query("select email, name from contacts where email like ? or name like ? order by uses desc, last_used desc limit 8", q, q)
