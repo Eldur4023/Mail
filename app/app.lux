@@ -16,6 +16,8 @@ import regex
 
 app:
     name      "Mail"
+    # Solo este equipo (en Android, solo este teléfono): el arranque se niega a empezar si no se declara.
+    host      "127.0.0.1"
     templates "./templates"
     static    "/static" -> "./public"
     static    "/outbox" -> "./data/outbox"   # lo que se acaba de subir (imágenes del editor); ids aleatorias, solo loopback

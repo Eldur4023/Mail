@@ -8,11 +8,11 @@ Cliente de correo de escritorio hecho con [Lux](vendor/lux): una ventana nativa 
 |---|---|
 | `app/` | La app, en LuxScript: `app.lux` (configuración y ventana), `sync.lux` (IMAP → SQLite), `messages.lux`, `send.lux`, `drafts.lux`, `actions.lux`, `folders.lux`, `accounts.lux`, `contacts.lux`, `db.lux`, `secrets.lux`, `window.lux` (menú, bandeja, notificaciones) y la interfaz en `templates/` y `public/`. |
 | `src/`, `include/`, `third_party/webview` | El shell de escritorio: ventana GTK/WebKit, arranque del servidor Lux por loopback y extracción de los recursos embebidos. |
-| `vendor/lux/` | Lux como código fuente, con los módulos nativos de correo (`imap`, `mail`, `mailparse`, `keyring`) y `window`. |
-| `tools/` | `respack` (embebe `app/` en el binario), `check_account.py` (diagnóstico de una cuenta) y `vendor_modules.py` (sincroniza los módulos de correo desde el repositorio `Lux` hermano, adaptándolos al Lux vendorizado). |
+| `vendor/lux/` | Lux como código fuente, **copia de la rama `dev` del repositorio principal `Lux`** (con los módulos de correo `imap`, `mail`, `mailparse`, `keyring`), más el módulo `window` de Lux Desktop (que no está en Lux; su casa es `Lux-Local`). |
+| `tools/` | `respack` (embebe `app/` en el binario), `check_account.py` (diagnóstico de una cuenta) y los scripts de Android. |
 | `tests/` | Prueba de extremo a extremo con servidores IMAP y SMTP falsos. |
 
-Los módulos nativos de correo se desarrollan en el repositorio **`Lux`** (carpeta hermana de esta) y se copian aquí con `python3 tools/vendor_modules.py`.
+`vendor/lux/` no se edita aquí: cualquier cambio en Lux (incluidos los módulos de correo) se hace en el repositorio `Lux`, rama `dev`, y se re-vendorea (se copian los ficheros; el módulo `window` se conserva).
 
 ## Probar con tu correo real
 
@@ -33,9 +33,9 @@ Si algo no cuadra (carpetas sin rol, mensajes que no aparecen), mira primero la 
 Binario de escritorio (un solo ejecutable, ventana nativa GTK/WebKit, menú, bandeja y notificaciones):
 
     cmake -S . -B build && cmake --build build --target luxmail && ./build/luxmail
-    cmake --build build --target luxmail-dev && ./build/luxmail-dev   # lee app/ del disco y recarga solo
+    ./build/vendor/lux/lux app --port 8080    # recarga solo al guardar; en un navegador (sin el módulo `window`: menú, bandeja y avisos no existen)
 
-(En `luxmail-dev` los datos van a `app/data/` y el vigilante recarga la página al escribir ahí, p. ej. al recuperar adjuntos de un borrador; usa el binario empaquetado para probar eso.)
+(Ya no hay `luxmail-dev`: usaba una API de `lux::App` que Lux ya no tiene.)
 
 ## Instalar y actualizar
 
@@ -87,7 +87,7 @@ Hecho:
 
 Límites conocidos: sin IDLE (se sondea cada 3 min); cada llamada IMAP abre una conexión nueva; carpetas solo de primer nivel al crear; sin OAuth2.
 
-Pruebas de extremo a extremo (IMAP y SMTP falsos): `tests/run_mail.sh` (usa `build/vendor/lux/lux`). Los módulos nativos se prueban en el repositorio hermano `../Lux/tests/` (`run_imap.sh`, `run_mailparse.sh`).
+Pruebas de extremo a extremo (IMAP y SMTP falsos): `tests/run_mail.sh` (usa `build/vendor/lux/lux`). Los módulos nativos se prueban en el repositorio `Lux` (`tests/run_imap.sh`, `tests/run_mailparse.sh`).
 
 ## OAuth2 (decidido: no se implementa)
 

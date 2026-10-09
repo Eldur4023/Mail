@@ -67,7 +67,9 @@ check "$M" '"subject":"dos","from_name":"b@x.com","from_email":"b@x.com","to_tex
 curl -s -m 10 -XPOST localhost:$WEB/api/accounts/2/delete >/dev/null
 if [ "$(Q 'body')" != "[]" ] && grep -q '"account_id":2' <<<"$(Q 'body')"; then echo "FAIL el índice conserva mensajes de una cuenta borrada"; fail=1; else echo "ok   cuenta borrada: sin mensajes en la búsqueda"; fi
 # borradores: guardar sin destinatario, conservar Cco, reemplazar la versión anterior, enviar, descartar
-draft() { curl -s -m 20 localhost:$WEB/api/draft -d account=1 --data-urlencode "subject=$1" -d "body=$2" ${3:+-d "bcc=oculto@z.com"} ${4:+--data-urlencode "replaces=$4"}; }
+# Lux escapa < y > como \u003c en el JSON (válido para cualquier cliente): se normaliza para poder buscar el Message-ID tal cual.
+unesc() { python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin), ensure_ascii=False, separators=(",", ":")))'; }
+draft() { curl -s -m 20 localhost:$WEB/api/draft -d account=1 --data-urlencode "subject=$1" -d "body=$2" ${3:+-d "bcc=oculto@z.com"} ${4:+--data-urlencode "replaces=$4"} | unesc; }
 D1=$(draft "Borrador uno" "texto 1" bcc); check "$D1" '"message_id":"<' "guardar borrador sin destinatario"
 check "$(cat "$T/imap.log")" 'Bcc: oculto@z.com' "el borrador conserva el Cco"
 ID1=$(sed -E 's/.*"message_id":"([^"]+)".*/\1/' <<<"$D1")
