@@ -241,10 +241,8 @@ fn Json sync_account(int account_id):
             notify = notify + added
     return { "total": total, "notify": notify }
 
-# Sincroniza una cuenta, o todas si no se indica. Un solo sync a la vez.
-post endpoint("/api/sync"):
-    require api_ok() else status(401)
-    db_init()
+# Sincroniza todas las cuentas. Un solo sync a la vez.
+fn Json sync_all():
     # marca de tiempo, no un simple "1": si un sync falla a medias no debe bloquear a los siguientes
     string running = state.get("syncing", "")
     if running != "" and time.now_seconds() - int(running) < 300:
@@ -257,9 +255,14 @@ post endpoint("/api/sync"):
         Json r = await sync_account(int(accs[i]["id"]))
         total = total + int(r["total"])
     state.set("syncing", "")
-    announce_new(lines_of(str(state.get("newmail", ""))))
+    await announce_new(lines_of(str(state.get("newmail", ""))))
     state.set("newmail", "")
     return { "added": total }
+
+post endpoint("/api/sync"):
+    require api_ok() else status(401)
+    db_init()
+    return await sync_all()
 
 # Un solo correo: remitente como título y asunto como texto. Varios: "N mensajes nuevos" y quién los envía.
 fn void announce_new(List<string> lines):
@@ -268,7 +271,7 @@ fn void announce_new(List<string> lines):
     if len(lines) == 1:
         List<string> one = lines[0].split("\t")
         string subject = len(one) > 1 ? one[1].trim() : ""
-        notify_new(1, one[0], subject == "" ? "(sin asunto)" : subject)
+        await notify_new(1, one[0], subject == "" ? "(sin asunto)" : subject)
         return
     string who = ""
     int names = 0
@@ -278,4 +281,10 @@ fn void announce_new(List<string> lines):
             names = names + 1
             if names <= 3:
                 who = who + (who == "" ? "" : ", ") + n
-    notify_new(len(lines), str(len(lines)) + " mensajes nuevos", who + (names > 3 ? " y otros" : ""))
+    await notify_new(len(lines), str(len(lines)) + " mensajes nuevos", who + (names > 3 ? " y otros" : ""))
+
+# Como servicio no hay página que sondee: el servidor sincroniza solo (con la ventana, lo hace su JS cada 30 s).
+every "1m":
+    if os.getenv("LUXDESKTOP_SERVICE", "") == "1":
+        db_init()
+        await sync_all()

@@ -20,6 +20,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ $UNINSTALL -eq 1 ]; then
+  [ -n "$APP_USER" ] && runuser -u "$APP_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$APP_USER")" systemctl --user disable --now mail-service.service 2>/dev/null || true
+  rm -f /usr/lib/systemd/user/mail-service.service
   rm -f /usr/local/bin/mail-desktop /usr/share/applications/mail-desktop.desktop /usr/share/icons/hicolor/256x256/apps/mail-desktop.png
   rm -rf /opt/mail-desktop
   echo "Desinstalado. Tus correos y ajustes se han conservado."
@@ -36,6 +38,7 @@ echo "==> Instalando en /usr/local/bin/mail-desktop"
 install -m 0755 "$BIN" /usr/local/bin/mail-desktop
 install -Dm 0644 "$HERE/app/icon.png" /usr/share/icons/hicolor/256x256/apps/mail-desktop.png
 install -Dm 0644 "$HERE/deploy/mail-desktop.desktop" /usr/share/applications/mail-desktop.desktop
+install -Dm 0644 "$HERE/deploy/mail-service.service" /usr/lib/systemd/user/mail-service.service
 gtk-update-icon-cache -qf /usr/share/icons/hicolor 2>/dev/null || true
 
 # Para que la ventana busque actualizaciones: de qué repositorio y commit se instaló.
@@ -43,4 +46,12 @@ install -d /opt/mail-desktop
 echo "$HERE" > /opt/mail-desktop/source
 runuser -u "$APP_USER" -- git -C "$HERE" rev-parse HEAD > /opt/mail-desktop/version 2>/dev/null || rm -f /opt/mail-desktop/version
 
+# El servicio (sin ventana) sincroniza y sirve la API local aunque Mail no esté abierto: se activa para el usuario y se reinicia
+# para que ejecute el binario nuevo.
+USER_RT="XDG_RUNTIME_DIR=/run/user/$(id -u "$APP_USER")"
+if [ -d "/run/user/$(id -u "$APP_USER")" ]; then
+  runuser -u "$APP_USER" -- env $USER_RT systemctl --user daemon-reload
+  runuser -u "$APP_USER" -- env $USER_RT systemctl --user enable mail-service.service 2>&1 | tail -1 || true
+  runuser -u "$APP_USER" -- env $USER_RT systemctl --user restart mail-service.service || echo "(no se pudo arrancar el servicio de Mail ahora; arrancará en el próximo inicio de sesión)"
+fi
 echo "Listo. Ábrelo desde el menú de aplicaciones o con: mail-desktop"

@@ -1,0 +1,14 @@
+[Unit]
+Description=Mail — sincronización y API local (sin ventana)
+# Servicio de usuario: necesita el llavero (secret-tool) y las notificaciones de su sesión.
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/mail-desktop --service
+Restart=on-failure
+RestartSec=5
+# Sin ventana ni bandeja: no aparece en la barra de tareas.
+
+[Install]
+WantedBy=default.target

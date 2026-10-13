@@ -40,12 +40,21 @@ post endpoint("/menu/quit"):
     window.close()
     return status(204)
 
+# KDE (Wayland) no da el foco a una app lanzada desde otra sin token de activación: un script de KWin activa la ventana del navegador.
+fn void focus_browser():
+    os.make_dir("data")
+    await os.write_file("data/focus.js", "for (const c of workspace.clientList()) if (c.resourceClass.toString().indexOf(\"brave\") >= 0) { workspace.activeClient = c; break; }\n")
+    string kw = "gdbus call --session -d org.kde.KWin -o /Scripting -m org.kde.kwin.Scripting."
+    string cmd = "exec > /dev/null 2>&1 < /dev/null; sleep 0.6; " + kw + "loadScript \"$PWD/data/focus.js\" mailfocus; gdbus call --session -d org.kde.KWin -o /0 -m org.kde.kwin.Script.run; " + kw + "unloadScript mailfocus"
+    await os.run("setsid", ["-f", "sh", "-c", cmd])
+
 # Abre un enlace del correo en el navegador del sistema (el WebKit embebido no abre ventanas nuevas).
 post endpoint("/api/open-url"):
     require api_ok() else status(401)
     string url = form("url", "")
     require url.starts_with("http://") or url.starts_with("https://") or url.starts_with("mailto:") else status(400)
     await os.run("setsid", ["-f", "xdg-open", url])
+    await focus_browser()
     return status(204)
 
 # Nombre y contenido del adjunto `part` del mensaje `id` (null si no existe).
@@ -100,9 +109,13 @@ post endpoint("/menu/:accion", string accion):
     require api_ok() else status(401)
     return status(204)
 
+# Con la ventana, window.notify; como servicio (sin ventana, `mail-desktop --service`) no hay window.*: notify-send.
 fn void notify_new(int added, string title, string detail):
     if added > 0:
-        window.notify(title, detail)
+        if os.getenv("LUXDESKTOP_SERVICE", "") == "1":
+            await os.run("notify-send", ["-a", "Mail", "-i", "/usr/share/icons/hicolor/256x256/apps/mail-desktop.png", title, detail])
+        else:
+            window.notify(title, detail)
 
 # Tras actualizar: abre la versión nueva y cierra esta. Sin redirigir, la app nueva
 # hereda nuestra salida y os.run esperaría hasta el timeout, y window.close() no llegaría.

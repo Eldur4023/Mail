@@ -296,6 +296,9 @@ bool wait_for_server(uint16_t port, std::chrono::milliseconds timeout) {
 
 int main(int argc, char** argv) {
     bool install = argc > 1 && std::string(argv[1]) == "--install-desktop";
+    // --service [puerto]: el servidor de la app sin ventana (para systemd): sigue sincronizando y sirviendo su API
+    // local con la ventana abierta o no. Puerto fijo (por defecto 7880), a diferencia de la ventana, que usa uno libre.
+    bool service = argc > 1 && std::string(argv[1]) == "--service";
 
     // Resources are extracted to a PERSISTENT directory (XDG data home), not
     // a temp one: anything the app writes next to its own sources at runtime
@@ -342,6 +345,19 @@ int main(int argc, char** argv) {
         std::cerr << "luxdesktop: app.lux must declare `host \"127.0.0.1\"` (found \""
                   << host << "\"): the UI server is for this machine only.\n";
         return 1;
+    }
+
+    if (service) {
+        setenv("LUXDESKTOP_SERVICE", "1", 1);   // la app lo lee con os.getenv: sin window.*, avisa con notify-send
+        const char* env_port = std::getenv("LUXDESKTOP_SERVICE_PORT");
+        std::string svc_port = argc > 2 ? argv[2] : (env_port ? env_port : "7880");
+        std::ofstream(work_dir / "service-port") << svc_port << "\n";
+        static char s0[] = "lux", s1[] = "--no-watch", s2[] = "--port", s4[] = ".";
+        char* svc_argv[] = {s0, s1, s2, svc_port.data(), s4, nullptr};
+        int rc = lux_main(5, svc_argv);   // bloquea hasta SIGTERM / CTRL+C
+        std::error_code ec;
+        fs::remove(work_dir / "service-port", ec);
+        return rc;
     }
 
     uint16_t port = find_free_port();
@@ -391,7 +407,11 @@ int main(int argc, char** argv) {
         std::string tok;
         if (tok_file >> tok && !tok.empty()) url += "#t=" + tok;
     }
+    // Otros programas del equipo (scripts, agentes) encuentran el puerto aquí; con `api-token` usan la API local.
+    std::ofstream(work_dir / "api-port") << port << "\n";
     window->run(url);
+    std::error_code rm_ec;
+    fs::remove(work_dir / "api-port", rm_ec);
     save_geometry(app_id, window->last_width(), window->last_height());
 
     // Destroy the window before waiting on the server: the webview keeps its

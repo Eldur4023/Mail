@@ -104,3 +104,22 @@ Solo se usa IMAP/SMTP con contraseña (cuentas propias). Gmail/Outlook con OAuth
 terreno está preparado: los módulos `imap` y `mail` aceptan `token` (XOAUTH2) en vez de `password`, y `accounts.auth`
 admite `oauth_google` / `oauth_ms`. Faltaría el flujo de login (abrir el navegador, recibir el `code` en una ruta
 loopback, canjearlo y refrescar tokens) y client IDs propios.
+
+## Servicio en segundo plano (sin ventana)
+
+`mail-desktop --service [puerto]` ejecuta solo el servidor de la app, sin ventana ni bandeja (no sale en la barra de tareas): sincroniza cada minuto, avisa con `notify-send` y sirve la API local en un **puerto fijo** (7880 por defecto, `LUXDESKTOP_SERVICE_PORT` para cambiarlo). `deploy/install.sh` lo instala como servicio de usuario de systemd (`mail-service.service`, activo desde el inicio de sesión) y lo reinicia en cada actualización: `systemctl --user status mail-service`. Así Flux u otros programas acceden al correo aunque la ventana esté cerrada. La ventana sigue funcionando por su cuenta (su propio servidor, comparte base de datos).
+
+## API local para otros programas (solo escritorio)
+
+Mail (mientras la ventana esté abierta) y el servicio de Calendar escuchan solo en `127.0.0.1` y exigen un secreto en cabecera:
+
+| | Puerto | Secreto | Cabecera |
+|---|---|---|---|
+| Mail | `7880` del servicio (la ventana usa otro, en `…/luxmail/api-port`) | `…/luxmail/api-token` | `X-Mail-Token` |
+| Calendar | `7879` (`CALENDAR_DAEMON_PORT`) | `/var/lib/calendar-daemon/api-token` | `X-Calendar-Token` |
+
+Mail: `GET /api/accounts`, `GET /api/messages?role=inbox&account=0&q=`, `GET /api/message/:id`, `POST /api/send` (form: `account`, `to`, `cc`, `bcc`, `subject`, `text`; `to`/`cc`/`bcc` una dirección por línea).
+Calendar: `GET /api/data?after=<ms>&before=<ms>`, `POST /api/ops` con `{"ops":[{"op":"event.put","calendar_id","title","start","end"(ms),"all_day"?,"tzid"?,"location"?,"notes"?,"rrule"?,"reminders"?}, {"op":"event.delete","id"}]}` (hasta 200 por lote).
+
+    T=$(cat ~/.local/share/lux-desktop/luxmail/api-token); P=$(cat ~/.local/share/lux-desktop/luxmail/api-port)
+    curl -H "X-Mail-Token: $T" "http://127.0.0.1:$P/api/messages?role=inbox"
