@@ -48,26 +48,52 @@ post endpoint("/api/open-url"):
     await os.run("setsid", ["-f", "xdg-open", url])
     return status(204)
 
-# Abre un adjunto con la aplicación predeterminada del sistema (lo extrae a data/open/).
-post endpoint("/api/message/:id/open/:part", int id, int part):
-    require api_ok() else status(401)
+# Nombre y contenido del adjunto `part` del mensaje `id` (null si no existe).
+fn Json load_attachment(int id, int part):
     db_init()
     List<Json> rows = await sqlite.query("select account_id, folder_id, uid from messages where id = ?", id)
-    require len(rows) > 0 else status(404)
+    if len(rows) == 0:
+        return null
     string raw = await os.read_file("data/eml/" + str(rows[0]["account_id"]) + "_" + str(rows[0]["folder_id"]) + "/" + str(rows[0]["uid"]) + ".eml")
     List<Json> found = mailparse.parse(raw)["attachments"]
     for int i in range(0, len(found)):
         if int(found[i]["part"]) == part:
+            # el nombre viene del remitente: se queda con un solo componente de ruta
             string name = str(found[i]["name"]).replace("/", "_").replace("\\", "_")
             if name.starts_with("."):
                 name = "_" + name
-            os.make_dir("data/open")
-            string dir = "data/open/" + hash.random_hex(8)
-            os.make_dir(dir)
-            await os.write_file(dir + "/" + name, mailparse.attachment(raw, part))
-            await os.run("setsid", ["-f", "xdg-open", dir + "/" + name])
-            return status(204)
-    return status(404)
+            return { "name": name, "data": mailparse.attachment(raw, part) }
+    return null
+
+# Abre un adjunto con la aplicación predeterminada del sistema (lo extrae a data/open/).
+post endpoint("/api/message/:id/open/:part", int id, int part):
+    require api_ok() else status(401)
+    Json a = load_attachment(id, part)
+    require a != null else status(404)
+    os.make_dir("data/open")
+    string dir = "data/open/" + hash.random_hex(8)
+    os.make_dir(dir)
+    await os.write_file(dir + "/" + str(a["name"]), a["data"])
+    await os.run("setsid", ["-f", "xdg-open", dir + "/" + str(a["name"])])
+    return status(204)
+
+# Manda un .ics a la API local del servicio de Calendar (mismo equipo, con su secreto de api-token).
+post endpoint("/api/message/:id/calendar/:part", int id, int part):
+    require api_ok() else status(401)
+    Json a = load_attachment(id, part)
+    require a != null else status(404)
+    string home = os.getenv("CALENDAR_DAEMON_HOME", "/var/lib/calendar-daemon")
+    string secret = ""
+    try:
+        secret = (await os.read_file(os.path_join(home, "api-token"))).trim()
+    catch e:
+        return { "detail": "No se puede leer el secreto de Calendar. ¿Está instalado el servicio de Calendar?" }.status(503)
+    try:
+        Json r = await http.post("http://127.0.0.1:" + os.getenv("CALENDAR_DAEMON_PORT", "7879") + "/api/import-ics", { "ics": str(a["data"]) },
+            { "X-Calendar-Token": secret }, { "timeout_ms": 30000 })
+        return r["body"].status(r["status"])
+    catch e:
+        return { "detail": "El servicio de Calendar no responde." }.status(503)
 
 # Respaldo: si el fetch no se interceptara en la página, al menos no es un 404.
 post endpoint("/menu/:accion", string accion):

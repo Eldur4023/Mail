@@ -13,6 +13,7 @@ import imap
 import mail
 import mailparse
 import regex
+import http
 
 app:
     name      "Mail"

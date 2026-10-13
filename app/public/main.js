@@ -391,6 +391,15 @@ async function openMessage(id) {
       const l = el("a", { href: "#", title: "Abrir" }, `${a.name} (${Math.ceil(a.size / 1024)} KB)`);
       l.onclick = (e) => { e.preventDefault(); post(`/api/message/${m.id}/open/${a.part}`).catch(() => toast("No se pudo abrir el adjunto.")); };
       att.append(i ? ", " : "", l);
+      if (/\.ics$/i.test(a.name) && !WV) {
+        const c = el("a", { href: "#", title: "Importar el evento en Calendar" }, "📅 Añadir a Calendar");
+        c.onclick = async (e) => {
+          e.preventDefault();
+          try { const r = await post(`/api/message/${m.id}/calendar/${a.part}`); toast(r.imported ? `Añadido a Calendar: ${r.titles.join(", ")}` : "No había eventos que importar."); }
+          catch (err) { toast(`No se pudo añadir a Calendar (${err.message}). ¿Está en marcha el servicio y hay algún calendario?`); }
+        };
+        att.append(" · ", c);
+      }
     });
     head.append(att);
   }
