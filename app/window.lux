@@ -40,6 +40,35 @@ post endpoint("/menu/quit"):
     window.close()
     return status(204)
 
+# Abre un enlace del correo en el navegador del sistema (el WebKit embebido no abre ventanas nuevas).
+post endpoint("/api/open-url"):
+    require api_ok() else status(401)
+    string url = form("url", "")
+    require url.starts_with("http://") or url.starts_with("https://") or url.starts_with("mailto:") else status(400)
+    await os.run("setsid", ["-f", "xdg-open", url])
+    return status(204)
+
+# Abre un adjunto con la aplicación predeterminada del sistema (lo extrae a data/open/).
+post endpoint("/api/message/:id/open/:part", int id, int part):
+    require api_ok() else status(401)
+    db_init()
+    List<Json> rows = await sqlite.query("select account_id, folder_id, uid from messages where id = ?", id)
+    require len(rows) > 0 else status(404)
+    string raw = await os.read_file("data/eml/" + str(rows[0]["account_id"]) + "_" + str(rows[0]["folder_id"]) + "/" + str(rows[0]["uid"]) + ".eml")
+    List<Json> found = mailparse.parse(raw)["attachments"]
+    for int i in range(0, len(found)):
+        if int(found[i]["part"]) == part:
+            string name = str(found[i]["name"]).replace("/", "_").replace("\\", "_")
+            if name.starts_with("."):
+                name = "_" + name
+            os.make_dir("data/open")
+            string dir = "data/open/" + hash.random_hex(8)
+            os.make_dir(dir)
+            await os.write_file(dir + "/" + name, mailparse.attachment(raw, part))
+            await os.run("setsid", ["-f", "xdg-open", dir + "/" + name])
+            return status(204)
+    return status(404)
+
 # Respaldo: si el fetch no se interceptara en la página, al menos no es un 404.
 post endpoint("/menu/:accion", string accion):
     require api_ok() else status(401)

@@ -39,7 +39,7 @@ fn string preview_of(Json m):
     string h = str(m["html"])
     if len(h) > 4000:
         h = h.slice(0, 4000)
-    h = regex.replace("<style[\\s\\S]*?</style>", h, " ")
+    h = regex.replace("<style[^>]*>[^<]*</style>", h, " ")   # ponytail: un <style> con "<" dentro deja su CSS en el extracto
     h = regex.replace("<[^>]*>", h, " ")
     h = h.replace("&nbsp;", " ")
     return regex.replace("\\s+", h, " ")

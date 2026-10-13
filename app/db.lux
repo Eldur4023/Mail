@@ -12,6 +12,8 @@ fn void db_init():
     # adjuntos subidos y nunca enviados: se tiran al arrancar
     if os.is_dir("data/outbox"):
         os.remove_dir("data/outbox", true)
+    if os.is_dir("data/open"):   # adjuntos abiertos con xdg-open
+        os.remove_dir("data/open", true)
     if state.get("db_init_running", "") == "1":
         for int i in range(0, 200):
             await sleep(50)

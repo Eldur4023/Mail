@@ -170,7 +170,7 @@ async function loadList() {
     if (m.thread_count > 1) right.append(el("span", { class: "count", title: `${m.thread_count} mensajes en la conversación` }, String(m.thread_count)));
     right.append(el("span", { class: "date" }, fmtDate(m.date)));
     r1.append(pick, el("span", { class: "from" }, who), right);
-    li.append(r1, el("div", { class: "subj" }, m.subject || "(sin asunto)"), el("div", { class: "snip" }, (m.has_att ? "📎 " : "") + m.snippet));
+    li.append(r1, el("div", { class: "subj", title: m.subject || "" }, m.subject || "(sin asunto)"), el("div", { class: "snip" }, (m.has_att ? "📎 " : "") + m.snippet));
     li.oncontextmenu = (e) => showCtx(e, [["Abrir en pestaña", () => openMessage(m.id)], safeItem(m.from_email)]);
     li.onclick = (e) => {
       if (e.shiftKey && state.anchor >= 0) pickRange(idx);
@@ -194,11 +194,40 @@ const tinyImg = (img) => {
   const dim = (k) => { const v = img.getAttribute(k) ?? st.match(new RegExp(`(?:^|;)\\s*${k}\\s*:\\s*([\\d.]+)(?:px)?\\s*(?:;|$)`, "i"))?.[1]; return v == null ? NaN : parseFloat(v); };
   return dim("width") < 10 || dim("height") < 10 || /display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:;|$)/i.test(st);
 };
+// Convierte en enlaces las URL que aparecen como texto (fuera de <a>).
+function linkify(root) {
+  const re = /https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g, doc = root.ownerDocument;
+  const walker = doc.createTreeWalker(root, 4), nodes = [];
+  for (let n; (n = walker.nextNode());) if (!n.parentElement.closest("a") && n.data.includes("http") && n.data.search(re) >= 0) nodes.push(n);
+  for (const n of nodes) {
+    const f = doc.createDocumentFragment();
+    let i = 0;
+    for (const m of n.data.matchAll(re)) {
+      f.append(n.data.slice(i, m.index));
+      const a = doc.createElement("a"); a.href = a.textContent = m[0]; f.append(a);
+      i = m.index + m[0].length;
+    }
+    f.append(n.data.slice(i));
+    n.replaceWith(f);
+  }
+  return root;
+}
+// Los enlaces de un correo se abren fuera: en Android lo hace el shell (navegación a _top), en escritorio el servidor con xdg-open.
+const WV = /; wv\)/.test(navigator.userAgent);
+function openLink(e) {
+  const a = e.target.closest?.("a[href]");
+  if (!a || !/^(https?:|mailto:)/i.test(a.href)) return;
+  if (WV) { a.target = "_top"; return; }
+  e.preventDefault();
+  post("/api/open-url", { url: a.href });
+}
+document.addEventListener("click", openLink);
 function htmlDoc(html, safe) {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:";
   const doc = new DOMParser().parseFromString(html, "text/html");   // inerte: no carga nada ni ejecuta scripts
+  linkify(doc.body);
   if (!safe) doc.querySelectorAll("img").forEach((i) => tinyImg(i) && i.remove());
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank"><body style="font:14px system-ui;margin:16px">${doc.head.innerHTML}${doc.body.innerHTML}`;
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="color-scheme" content="light"><base target="_blank"><body style="font:14px system-ui;margin:16px;background:#fff;color:#222">${doc.head.innerHTML}${doc.body.innerHTML}`;
 }
 
 // Conversación del mensaje abierto: todos sus mensajes (también los enviados desde otra carpeta).
@@ -356,7 +385,15 @@ async function openMessage(id) {
   head.lastChild.append(acc);
   head.oncontextmenu = (e) => showCtx(e, [safeItem(m.from_email)]);
   const shown = m.attachments.filter((a) => !(a.cid && (m.html_cid || "").includes("cid:" + a.cid)));   // las imágenes del cuerpo no son "adjuntos"
-  if (shown.length) head.append(el("div", { class: "att" }, "📎 " + shown.map((a) => `${a.name} (${Math.ceil(a.size / 1024)} KB)`).join(", ")));
+  if (shown.length) {
+    const att = el("div", { class: "att" }, "📎 ");
+    shown.forEach((a, i) => {
+      const l = el("a", { href: "#", title: "Abrir" }, `${a.name} (${Math.ceil(a.size / 1024)} KB)`);
+      l.onclick = (e) => { e.preventDefault(); post(`/api/message/${m.id}/open/${a.part}`).catch(() => toast("No se pudo abrir el adjunto.")); };
+      att.append(i ? ", " : "", l);
+    });
+    head.append(att);
+  }
   const actions = el("div", { class: "actions" });
   const button = (label, fn, cls = "", act = "") => { const b = el("button", { ...(cls && { class: cls }), ...(act && { "data-act": act }) }, label); b.onclick = () => fn(b); actions.append(b); };
   if (m.role === "drafts") {
@@ -376,11 +413,12 @@ async function openMessage(id) {
   r.append(head);
   if (thread.length > 1) r.append(threadList(thread, id));
   if (m.html) {
-    const frame = el("iframe", { sandbox: "" });
+    const frame = el("iframe", { sandbox: "allow-same-origin allow-top-navigation-by-user-activation" });   // sin allow-scripts: el correo no ejecuta nada
+    frame.onload = () => frame.contentDocument.addEventListener("click", openLink);
     frame.srcdoc = htmlDoc(m.html, state.safe.has(domainOf(m.from_email)));
     r.append(frame);
   } else {
-    r.append(el("pre", {}, m.text));
+    r.append(linkify(el("pre", {}, m.text)));
   }
   post(`/api/message/${id}/seen`).then(refreshFolders);
   loadList();
@@ -953,6 +991,7 @@ const KEYS = {
   e: () => menu.archive(), "!": () => menu.spam(), m: () => menu.move(), u: () => menu.unseen(), Delete: () => menu.delete(),
 };
 document.addEventListener("keydown", (e) => {
+  if (e.key === "F5") { e.preventDefault(); sync(); return; }
   if (e.key === "Escape" && !ctx.hidden) { hideCtx(); return; }
   if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
     if (state.selected.size) clearSelection(); else if (state.tab) closeTab(state.tab);
@@ -1042,4 +1081,4 @@ checkUpdate();
 if (/; wv\)/.test(navigator.userAgent)) {
   setInterval(refreshAll, 60 * 1000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
-} else setInterval(sync, 3 * 60 * 1000);   // ponytail: sondeo cada 3 min; IMAP IDLE no está disponible con libcurl
+} else setInterval(sync, 30 * 1000);   // ponytail: sondeo cada 30 s; IMAP IDLE no está disponible con libcurl
