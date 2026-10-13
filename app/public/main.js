@@ -227,6 +227,8 @@ function htmlDoc(html, safe) {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:";
   const doc = new DOMParser().parseFromString(html, "text/html");   // inerte: no carga nada ni ejecuta scripts
   linkify(doc.body);
+  // Los correos con su propio modo oscuro (Google, GitHub...) ya vienen oscuros: con la inversión de abajo quedarían claros al revés. Se les dice que no hay modo oscuro.
+  doc.querySelectorAll("style").forEach((st) => { st.textContent = st.textContent.replace(/prefers-color-scheme\s*:\s*dark/gi, "prefers-color-scheme:light"); });
   if (!safe) doc.querySelectorAll("img").forEach((i) => tinyImg(i) && i.remove());
   return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="color-scheme" content="light"><style>html{background:#fff;filter:invert(1) hue-rotate(180deg)}img,video,picture,svg,[style*=background-image]{filter:invert(1) hue-rotate(180deg)}</style><base target="_blank"><body style="font:14px system-ui;margin:16px;background:#fff;color:#222">${doc.head.innerHTML}${doc.body.innerHTML}`;
 }
