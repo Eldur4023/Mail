@@ -69,8 +69,11 @@ class MainActivity : Activity() {
                     val uri = Uri.parse("content://${OpenProvider.AUTHORITY}/" + Uri.encode(safe))
                     val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, OpenProvider.mime(safe))
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                    try { startActivity(i) }
-                    catch (e: android.content.ActivityNotFoundException) { toast("No hay ninguna app para abrir $safe") }
+                    try {
+                        // un .ics va derecho a la app Calendar si está instalada; si no, a quien lo sepa abrir
+                        try { startActivity(Intent(i).setPackage(if (safe.endsWith(".ics", true)) "dev.lux.calendar" else null)) }
+                        catch (e: android.content.ActivityNotFoundException) { startActivity(i) }
+                    } catch (e: android.content.ActivityNotFoundException) { toast("No hay ninguna app para abrir $safe") }
                 } catch (e: Exception) { toast("No se pudo abrir el adjunto") }
             }.start()
         }

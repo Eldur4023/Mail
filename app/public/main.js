@@ -395,10 +395,11 @@ async function openMessage(id) {
         else post(`/api/message/${m.id}/open/${a.part}`).catch(() => toast("No se pudo abrir el adjunto."));
       };
       att.append(i ? ", " : "", l);
-      if (/\.ics$/i.test(a.name) && !WV) {
+      if (/\.ics$/i.test(a.name)) {
         const c = el("a", { href: "#", title: "Importar el evento en Calendar" }, "📅 Añadir a Calendar");
         c.onclick = async (e) => {
           e.preventDefault();
+          if (WV) return AndroidBridge.openFile(`${location.origin}/api/message/${m.id}/attachment/${a.part}`, a.name);   // la app Calendar del móvil lo importa
           try { const r = await post(`/api/message/${m.id}/calendar/${a.part}`); toast(r.imported ? `Añadido a Calendar: ${r.titles.join(", ")}` : "No había eventos que importar."); }
           catch (err) { toast(`No se pudo añadir a Calendar (${err.message}). ¿Está en marcha el servicio y hay algún calendario?`); }
         };
@@ -454,6 +455,14 @@ async function sync() {
   syncing = false;
   $("#sync").disabled = false;
   refreshAll();
+}
+
+// Tirar de la lista hacia abajo estando arriba del todo: sincroniza.
+{
+  const list = $("#messages");
+  let y0 = null;
+  list.addEventListener("touchstart", (e) => { y0 = list.scrollTop === 0 ? e.touches[0].clientY : null; }, { passive: true });
+  list.addEventListener("touchend", (e) => { if (y0 !== null && e.changedTouches[0].clientY - y0 > 80) sync(); y0 = null; }, { passive: true });
 }
 
 // ---- redactar ------------------------------------------------------------------------
