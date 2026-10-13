@@ -179,3 +179,23 @@ post endpoint("/api/message/:id/attachments", int id):
         await os.write_file("data/outbox/" + upload + "/" + name, mailparse.attachment(raw, int(found[i]["part"])))
         out.add({ "id": upload, "name": name, "size": found[i]["size"], "cid": found[i]["cid"] })
     return out
+
+# El adjunto `part` tal cual (lo pide el shell de Android para abrirlo con otra app). Se saca a data/open/, que se vacía al arrancar.
+get endpoint("/api/message/:id/attachment/:part", int id, int part):
+    require api_ok() else status(401)
+    db_init()
+    List<Json> rows = await sqlite.query("select account_id, folder_id, uid from messages where id = ?", id)
+    require len(rows) > 0 else status(404)
+    string raw = await os.read_file("data/eml/" + str(rows[0]["account_id"]) + "_" + str(rows[0]["folder_id"]) + "/" + str(rows[0]["uid"]) + ".eml")
+    List<Json> found = mailparse.parse(raw)["attachments"]
+    for int i in range(0, len(found)):
+        if int(found[i]["part"]) == part:
+            string name = str(found[i]["name"]).replace("/", "_").replace("\\", "_")
+            if name.starts_with("."):
+                name = "_" + name
+            os.make_dir("data/open")
+            string dir = "data/open/" + hash.random_hex(8)
+            os.make_dir(dir)
+            await os.write_file(dir + "/" + name, mailparse.attachment(raw, part))
+            return send_file(dir + "/" + name, { "filename": name })
+    return status(404)

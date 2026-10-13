@@ -19,6 +19,9 @@
             </intent-filter>
         </activity>
 
+        <provider android:name=".OpenProvider" android:authorities="dev.lux.mail.files" android:exported="false"
+            android:grantUriPermissions="true" />
+
         <!-- Polls IMAP every 2 minutes with wake-up alarms (no foreground service, no permanent notification). -->
         <receiver android:name=".SyncReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:exported="true">

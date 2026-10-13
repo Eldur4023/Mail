@@ -216,7 +216,7 @@ function linkify(root) {
 const WV = /; wv\)/.test(navigator.userAgent);
 function openLink(e) {
   const a = e.target.closest?.("a[href]");
-  if (!a || !/^(https?:|mailto:)/i.test(a.href)) return;
+  if (!a || !/^(https?:|mailto:)/i.test(a.getAttribute("href"))) return;   // los href="#" son botones de la propia interfaz
   if (WV) { a.target = "_top"; return; }
   e.preventDefault();
   post("/api/open-url", { url: a.href });
@@ -389,7 +389,11 @@ async function openMessage(id) {
     const att = el("div", { class: "att" }, "📎 ");
     shown.forEach((a, i) => {
       const l = el("a", { href: "#", title: "Abrir" }, `${a.name} (${Math.ceil(a.size / 1024)} KB)`);
-      l.onclick = (e) => { e.preventDefault(); post(`/api/message/${m.id}/open/${a.part}`).catch(() => toast("No se pudo abrir el adjunto.")); };
+      l.onclick = (e) => {
+        e.preventDefault();
+        if (WV) AndroidBridge.openFile(`${location.origin}/api/message/${m.id}/attachment/${a.part}`, a.name);   // el shell lo abre con otra app
+        else post(`/api/message/${m.id}/open/${a.part}`).catch(() => toast("No se pudo abrir el adjunto."));
+      };
       att.append(i ? ", " : "", l);
       if (/\.ics$/i.test(a.name) && !WV) {
         const c = el("a", { href: "#", title: "Importar el evento en Calendar" }, "📅 Añadir a Calendar");

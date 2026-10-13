@@ -31,6 +31,7 @@ class MainActivity : Activity() {
                 return true
             }
         }
+        web.addJavascriptInterface(Bridge(), "AndroidBridge")
         // <input type=file> (attachments, inline images) needs the host to show a picker.
         web.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(v: WebView, cb: ValueCallback<Array<Uri>>, p: FileChooserParams): Boolean {
@@ -51,6 +52,31 @@ class MainActivity : Activity() {
             runOnUiThread { if (port < 0) finish() else web.loadUrl("http://127.0.0.1:$port/#t=$token") }
         }.start()
     }
+
+    // Para la página: trae un adjunto del servidor local y lo abre con la app que lo gestione (un .ics, con el calendario).
+    private inner class Bridge {
+        @android.webkit.JavascriptInterface
+        fun openFile(url: String, name: String) {
+            if (!url.startsWith("http://127.0.0.1:")) return
+            Thread {
+                try {
+                    val safe = name.replace('/', '_').replace('\\', '_').trimStart('.').ifEmpty { "adjunto" }
+                    val dir = java.io.File(cacheDir, "open").apply { mkdirs() }
+                    val out = java.io.File(dir, safe)
+                    val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    c.setRequestProperty("X-Mail-Token", Sync.token(this@MainActivity))
+                    c.inputStream.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+                    val uri = Uri.parse("content://${OpenProvider.AUTHORITY}/" + Uri.encode(safe))
+                    val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, OpenProvider.mime(safe))
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try { startActivity(i) }
+                    catch (e: android.content.ActivityNotFoundException) { toast("No hay ninguna app para abrir $safe") }
+                } catch (e: Exception) { toast("No se pudo abrir el adjunto") }
+            }.start()
+        }
+    }
+
+    private fun toast(msg: String) = runOnUiThread { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() }
 
     // First launch only: notification permission (Android 13+) and exemption from battery optimisation,
     // without which Doze delays the background sync by tens of minutes.
