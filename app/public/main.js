@@ -219,7 +219,7 @@ function openLink(e) {
   if (!a || !/^(https?:|mailto:)/i.test(a.getAttribute("href"))) return;   // los href="#" son botones de la propia interfaz
   if (WV) { a.target = "_top"; return; }
   e.preventDefault();
-  post("/api/open-url", { url: a.href });
+  post("/api/open-url", { url: a.href }).catch((err) => console.error("open-url", err));
 }
 document.addEventListener("click", openLink);
 // Tema oscuro: el correo se pinta invertido y las imágenes se devuelven a su color.
@@ -227,6 +227,8 @@ function htmlDoc(html, safe) {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:";
   const doc = new DOMParser().parseFromString(html, "text/html");   // inerte: no carga nada ni ejecuta scripts
   linkify(doc.body);
+  doc.querySelectorAll("script,object,embed,iframe").forEach((n) => n.remove());
+  doc.querySelectorAll("*").forEach((n) => [...n.attributes].forEach((a) => /^on/i.test(a.name) && n.removeAttribute(a.name)));
   // Los correos con su propio modo oscuro (Google, GitHub...) ya vienen oscuros: con la inversión de abajo quedarían claros al revés. Se les dice que no hay modo oscuro.
   doc.querySelectorAll("style").forEach((st) => { st.textContent = st.textContent.replace(/prefers-color-scheme\s*:\s*dark/gi, "prefers-color-scheme:light"); });
   if (!safe) doc.querySelectorAll("img").forEach((i) => tinyImg(i) && i.remove());
@@ -430,7 +432,7 @@ async function openMessage(id) {
   r.append(head);
   if (thread.length > 1) r.append(threadList(thread, id));
   if (m.html) {
-    const frame = el("iframe", { sandbox: "allow-same-origin allow-top-navigation-by-user-activation" });   // sin allow-scripts: el correo no ejecuta nada
+    const frame = el("iframe", { sandbox: "allow-same-origin allow-scripts allow-top-navigation-by-user-activation" });   // WebKit no ejecuta los listeners de la página padre en un iframe sin allow-scripts; el correo sigue sin ejecutar nada: CSP sin script-src + htmlDoc quita <script> y on*
     frame.onload = () => {
       const d = frame.contentDocument;
       d.addEventListener("click", openLink);
