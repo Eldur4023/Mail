@@ -222,12 +222,13 @@ function openLink(e) {
   post("/api/open-url", { url: a.href });
 }
 document.addEventListener("click", openLink);
+// Tema oscuro: el correo se pinta invertido y las imágenes se devuelven a su color.
 function htmlDoc(html, safe) {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:";
   const doc = new DOMParser().parseFromString(html, "text/html");   // inerte: no carga nada ni ejecuta scripts
   linkify(doc.body);
   if (!safe) doc.querySelectorAll("img").forEach((i) => tinyImg(i) && i.remove());
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="color-scheme" content="light"><base target="_blank"><body style="font:14px system-ui;margin:16px;background:#fff;color:#222">${doc.head.innerHTML}${doc.body.innerHTML}`;
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="color-scheme" content="light"><style>html{background:#fff;filter:invert(1) hue-rotate(180deg)}img,video,picture,svg,[style*=background-image]{filter:invert(1) hue-rotate(180deg)}</style><base target="_blank"><body style="font:14px system-ui;margin:16px;background:#fff;color:#222">${doc.head.innerHTML}${doc.body.innerHTML}`;
 }
 
 // Conversación del mensaje abierto: todos sus mensajes (también los enviados desde otra carpeta).
@@ -428,7 +429,11 @@ async function openMessage(id) {
   if (thread.length > 1) r.append(threadList(thread, id));
   if (m.html) {
     const frame = el("iframe", { sandbox: "allow-same-origin allow-top-navigation-by-user-activation" });   // sin allow-scripts: el correo no ejecuta nada
-    frame.onload = () => frame.contentDocument.addEventListener("click", openLink);
+    frame.onload = () => {
+      const d = frame.contentDocument;
+      d.addEventListener("click", openLink);
+      d.addEventListener("keydown", (e) => { if (e.key === "F5") { e.preventDefault(); sync(); } });   // con el foco dentro del correo el documento principal no ve las teclas
+    };
     frame.srcdoc = htmlDoc(m.html, state.safe.has(domainOf(m.from_email)));
     r.append(frame);
   } else {
