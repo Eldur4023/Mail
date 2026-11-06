@@ -56,7 +56,9 @@ class H(socketserver.StreamRequestHandler):
             elif up.startswith("DELETE"):
                 FOLDERS.pop(cmd.split('"')[1], None)
             elif up.startswith("STATUS"):
-                self.send('* STATUS "INBOX" (MESSAGES 2 UIDNEXT 10 UIDVALIDITY 77 UNSEEN 1)\r\n')
+                st = FOLDERS.get(cmd.split('"')[1]) or {}   # UIDNEXT follows the folder: the app's light sync trusts it
+                nxt = max(max(st, default=0), LAST.get(id(st), 0)) + 1
+                self.send(f'* STATUS "INBOX" (MESSAGES {len(st)} UIDNEXT {nxt} UIDVALIDITY 77 UNSEEN 1)\r\n')
             elif up.startswith("SELECT"):
                 sel = cmd.split(" ", 1)[1].strip().strip('"')
                 self.send("* 2 EXISTS\r\n* OK [UIDVALIDITY 77] ok\r\n")

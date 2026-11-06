@@ -33,6 +33,14 @@ check "$(acct Trabajo yo@x.com 1d4ed8)" '"id":1' "alta cuenta 1"
 check "$(acct Personal yo@y.com 16a34a)" '"id":2' "alta cuenta 2"
 check "$(curl -s -m 60 -XPOST localhost:$WEB/api/sync)" '"added":8' "sync de dos cuentas"
 check "$(curl -s -m 60 -XPOST localhost:$WEB/api/sync)" '"added":0' "segunda sync incremental"
+# sync ligera (segundo plano de la APK): sin novedades no pide mensajes; con novedades baja solo lo nuevo
+remote() { exec 3<>/dev/tcp/127.0.0.1/$IMAP; printf '%s\r\n' "x X-TEST $1" >&3; sleep 0.2; exec 3>&-; }
+F0=$(grep -c 'UID FETCH' "$T/imap.log")
+check "$(curl -s -m 60 -XPOST "localhost:$WEB/api/sync?light=1")" '"added":0' "sync ligera sin novedades"
+if [ "$(grep -c 'UID FETCH' "$T/imap.log")" = "$F0" ]; then echo "ok   sync ligera: ningun UID FETCH"; else echo "FAIL sync ligera pidio mensajes"; fail=1; fi
+remote "ADD 10 $(printf 'Subject: tres\r\nFrom: c@x.com\r\n\r\nbody three\r\n' | base64 -w0)"
+check "$(curl -s -m 60 -XPOST "localhost:$WEB/api/sync?light=1")" '"added":2' "sync ligera baja el correo nuevo (2 cuentas)"
+remote 'DELETE 10'; curl -s -m 60 -XPOST localhost:$WEB/api/sync >/dev/null
 M0=$(curl -s -m 5 "localhost:$WEB/api/messages?role=inbox"); M=$M0; check "$M" '"color":"#16a34a"' "bandeja unificada con color"
 check "$(curl -s -m 5 "localhost:$WEB/api/messages?role=inbox&account=2&q=dos")" '"account_id":2' "filtro por cuenta + búsqueda"
 # enviar como la cuenta 2, respondiendo a un mensaje; Cco solo en el sobre

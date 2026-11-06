@@ -30,6 +30,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <mutex>
 
 namespace lux_script {
 
@@ -196,13 +198,29 @@ size_t on_read(char* buf, size_t sz, size_t n, void* u) {
 }
 
 // One curl handle with the account's connection options, a body sink, and an error buffer.
+// Idle handles per account: a curl handle keeps its IMAP connection (login + SELECTed mailbox) alive
+// between calls, so reusing it saves a TCP+TLS+LOGIN handshake per call.
+// ponytail: a handle idle past the server's timeout reconnects on its own (curl notices); pool capped, no reaper.
+std::mutex g_pool_mu;
+std::map<std::string, std::vector<CURL*>> g_pool;
+constexpr size_t kPoolPerKey = 4;
+
 struct Session {
-    CURL* curl = lux_curl_init();
+    CURL* curl = nullptr;
     Conn  conn;
     Sink  sink;
     char  err[CURL_ERROR_SIZE] = "";
+    std::string key;
+    bool  poolable = true;   // false after options that must not leak into the next call (upload) or an error
 
     explicit Session(const Conn& c) : conn(c) {
+        key = c.host + '\n' + std::to_string(c.port) + '\n' + c.tls + '\n' + c.user + '\n' + c.password + '\n' + c.token;
+        {
+            std::lock_guard<std::mutex> g(g_pool_mu);
+            auto it = g_pool.find(key);
+            if (it != g_pool.end() && !it->second.empty()) { curl = it->second.back(); it->second.pop_back(); }
+        }
+        if (!curl) curl = lux_curl_init();
         if (!curl) return;
         curl_easy_setopt(curl, CURLOPT_USERNAME, conn.user.c_str());
         if (!conn.token.empty()) curl_easy_setopt(curl, CURLOPT_XOAUTH2_BEARER, conn.token.c_str());
@@ -215,7 +233,15 @@ struct Session {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, kTimeoutMs);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     }
-    ~Session() { if (curl) curl_easy_cleanup(curl); }
+    ~Session() {
+        if (!curl) return;
+        if (poolable) {
+            std::lock_guard<std::mutex> g(g_pool_mu);
+            auto& v = g_pool[key];
+            if (v.size() < kPoolPerKey) { v.push_back(curl); return; }
+        }
+        curl_easy_cleanup(curl);
+    }
 
     // `path` is "" or "/Folder" or "/Folder;UID=5". `command` empty = plain fetch/list.
     bool run(const std::string& path, const std::string& command, const char* fn, std::string& error) {
@@ -227,6 +253,7 @@ struct Session {
         err[0] = 0;
         const CURLcode rc = curl_easy_perform(curl);
         if (rc == CURLE_OK) return true;
+        poolable = false;
         // Login failures are the common one (bad password, expired OAuth token): say so plainly.
         error = std::string(fn) + "(): " +
                 (rc == CURLE_LOGIN_DENIED ? "login failed (wrong password or expired token)"
@@ -449,6 +476,7 @@ Value fn_append(NativeCtx&, std::vector<Value>& a, std::string& error) {
     IMAP_PREP("imap.append")
     const std::string& raw = a[2].as_str();
     Upload up{&raw};
+    s.poolable = false;
     curl_easy_setopt(s.curl, CURLOPT_UPLOAD, 1L);
     curl_easy_setopt(s.curl, CURLOPT_READFUNCTION, on_read);
     curl_easy_setopt(s.curl, CURLOPT_READDATA, &up);
