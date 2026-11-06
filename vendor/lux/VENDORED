@@ -1,0 +1,7 @@
+Source: Lux @12b1dd897678f466686297722cd098d9530ff7f8, branch stable, 2026-11-06.
+Refresh: git -C ../Lux archive origin/stable | tar -x into vendor/lux (after git rm -rq vendor/lux; rm -rf vendor/lux).
+Mail-only files (kept on refresh, NOT in Lux):
+  src/lux_script/modules/window.cpp
+  include/lux_script/window_config.hpp
+  include/lux_script/window_control.hpp
+Local patch (reapply with a 3-way merge on refresh): src/lux_script/modules/base_modules/imap.cpp keeps a pool of curl handles per account.

@@ -2,6 +2,8 @@
 #include <unordered_set>
 #include <lux_script/natives.hpp>
 #include <lux/tls.hpp>
+#include <lux/http_cache.hpp>
+#include <lux_script/luxp_serve.hpp>
 #include <lux_script/template.hpp>
 #include <lux_script/crypto.hpp>
 #include <lux_script/auth.hpp>
@@ -16,15 +18,23 @@
 #include <lux/multipart.hpp>
 
 #include <algorithm>
+#include <map>
 #include <array>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
+#include <lux_script/platform_os.hpp>
+#ifdef _WIN32
+#  include <io.h>
+#  include <fcntl.h>
+#  include <sys/stat.h>
+#else
+#  include <fcntl.h>
+#  include <unistd.h>
+#  include <sys/stat.h>
+#endif
 
 namespace lux_script {
 
@@ -83,11 +93,20 @@ Value fn_render_tpl(NativeCtx& ctx, std::vector<Value>& args, std::string& error
         values.push_back(it == args[1].as_dict().end() ? Value::null() : it->second);
     }
 
+    // A client that asks for a .luxp gets it from the template's plan when it
+    // has one (luxp_serve.hpp); otherwise the filled HTML is translated.
+    bool luxp_ok = true;
+    if (wants_luxp(ctx.req)) {
+        const LuxpOutcome o = luxp_respond(ctx, p, values);
+        if (o == LuxpOutcome::Sent) { ctx.response_written = true; return Value::null(); }
+        luxp_ok = o != LuxpOutcome::HtmlOnly;
+    }
+
     std::string out;
     if (!render_template(p, std::move(values), ctx, ctx.functions, out, error))
         return Value::null();
 
-    ctx.res.header("Content-Type", "text/html; charset=utf-8").send(std::move(out));
+    send_page(ctx.req, ctx.res, out, luxp_ok);
     ctx.response_written = true;
     return Value::null();
 }
@@ -172,30 +191,18 @@ std::string percent(const std::string& s) {
     }
     return out;
 }
-
-// Is `etag` listed in an If-None-Match value ("*", or a comma list, W/ ignored)?
-bool etag_listed(const std::string& header, const std::string& etag) {
-    if (header == "*") return true;
-    size_t pos = 0;
-    while (pos < header.size()) {
-        size_t comma = header.find(',', pos);
-        if (comma == std::string::npos) comma = header.size();
-        std::string t = header.substr(pos, comma - pos);
-        t.erase(0, t.find_first_not_of(' '));
-        t.erase(t.find_last_not_of(' ') + 1);
-        if (t.rfind("W/", 0) == 0) t.erase(0, 2);
-        if (t == etag) return true;
-        pos = comma + 1;
-    }
-    return false;
-}
 } // namespace
 
 } // namespace (the file-wide anonymous one: send_file_checked is public)
 
 void send_file_checked(lux::Request& req, lux::Response& res, const std::string& path,
                        const std::string* root, const std::string& filename, bool inline_) {
+#ifndef _WIN32
+    struct stat st{};
+    if (root) res.serve_file_from(*root, path, &st); else res.send_file_stat(path, st);
+#else
     if (root) res.serve_file_from(*root, path); else res.send_file(path);
+#endif
     const std::string file = res.sendfile_path();
     if (file.empty()) return;   // an error response (403, 404, ...)
 
@@ -203,17 +210,25 @@ void send_file_checked(lux::Request& req, lux::Response& res, const std::string&
         res.header("Content-Disposition", std::string(inline_ ? "inline" : "attachment") +
                    "; filename=" + quoted(filename) + "; filename*=UTF-8''" + percent(filename));
 
-    struct stat st{};
-    if (::stat(file.c_str(), &st) != 0) return;
     char buf[64];
+#ifdef _WIN32
+    std::error_code ec;
+    const auto mtime = std::filesystem::last_write_time(plat::to_path(file), ec);
+    const auto fsize = ec ? 0 : std::filesystem::file_size(plat::to_path(file), ec);
+    if (ec) return;
+    std::snprintf(buf, sizeof buf, "\"%llx-%llx\"",
+                  static_cast<unsigned long long>(std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch()).count()),
+                  static_cast<unsigned long long>(fsize));
+#else
     std::snprintf(buf, sizeof buf, "\"%llx-%llx\"",
                   static_cast<unsigned long long>(st.st_mtim.tv_sec) * 1000000000ull + static_cast<unsigned long long>(st.st_mtim.tv_nsec),
                   static_cast<unsigned long long>(st.st_size));
+#endif
     const std::string etag = buf;
     res.header("ETag", etag);
     if (!res.header_value("Cache-Control")) res.header("Cache-Control", "no-cache");   // revalidate with the ETag every time
     const std::string* inm = req.header("if-none-match");
-    if (inm && etag_listed(*inm, etag)) {
+    if (inm && lux::etag_listed(*inm, etag)) {
         res.take_body();
         res.status(304).send("");
     }
@@ -831,13 +846,66 @@ bool SharedState::remove(const std::string& key) {
     return data_.erase(key) > 0 || had;
 }
 
+// ── the browser profile (BrowserProfile, natives.hpp) ─────────────────────
+namespace {
+thread_local bool t_browser = false;
+
+namespace browser {
+// Page bytecode never runs on the server: these only give the compiler
+// names, arities and types.
+Value stub(NativeCtx&, std::vector<Value>&, std::string& error) {
+    error = "a browser builtin cannot run on the server";
+    return Value::null();
+}
+const NativeDef kNatives[] = {
+#define LUX_BROWSER_NATIVE(name, min, max, impl, is_async) {name, min, max, stub, is_async},
+#include <lux_script/browser_api.inc>
+};
+struct Member { const char* object; const char* member; const char* native; };
+const Member kMembers[] = {
+#define LUX_BROWSER_MEMBER(object, member, native) {object, member, native},
+#include <lux_script/browser_api.inc>
+};
+struct Method { const char* type; BuiltinMethod m; };
+const Method kMethods[] = {
+#define LUX_BROWSER_METHOD_X(type, name, min, max, ret, async_native) {type, {name, min, max, ret, async_native}},
+#include <lux_script/browser_api.inc>
+};
+
+int id(const std::string& name) {
+    for (size_t i = 0; i < std::size(kNatives); ++i)
+        if (name == kNatives[i].name) return static_cast<int>(i);
+    return -1;
+}
+
+const std::vector<BuiltinMethod>* methods(const std::string& type) {
+    static const std::map<std::string, std::vector<BuiltinMethod>> by_type = [] {
+        std::map<std::string, std::vector<BuiltinMethod>> m;
+        for (const auto& x : kMethods) m[x.type].push_back(x.m);
+        return m;
+    }();
+    auto it = by_type.find(type);
+    return it == by_type.end() ? nullptr : &it->second;
+}
+} // namespace browser
+} // namespace
+
+bool browser_profile_active() { return t_browser; }
+
+BrowserProfile::BrowserProfile() : prev_(t_browser) { t_browser = true; }
+BrowserProfile::~BrowserProfile() { t_browser = prev_; }
+
 int native_id(const std::string& name) {
+    if (t_browser) return browser::id(name);
     for (size_t i = 0; i < kNatives.size(); ++i)
         if (name == kNatives[i].name) return static_cast<int>(i);
     return -1;
 }
 
-const NativeDef& native_at(int id) { return kNatives[static_cast<size_t>(id)]; }
+const NativeDef& native_at(int id) {
+    if (t_browser) return browser::kNatives[static_cast<size_t>(id)];
+    return kNatives[static_cast<size_t>(id)];
+}
 
 
 // ─── Methods on values ───────────────────────────────────────────────────────
@@ -1404,7 +1472,7 @@ Value call_method(NativeCtx& ctx, Value& recv, const std::string& name,
             if (!dir.empty() && dir.back() != '/') dir += "/";
 
             std::error_code ec;
-            std::filesystem::create_directories(dir, ec);
+            std::filesystem::create_directories(plat::to_path(dir), ec);
 
             // `filename` is whatever the client sent: two uploads can
             // legitimately pick the same name, and an attacker can pick one
@@ -1442,8 +1510,13 @@ Value call_method(NativeCtx& ctx, Value& recv, const std::string& name,
                     }
                     candidate = stem + "-" + crypto::hex_encode(suffix) + ext;
                 }
+#ifdef _WIN32
+                fd = _wopen(plat::widen(dir + candidate).c_str(),
+                            _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
+#else
                 fd = ::open((dir + candidate).c_str(),
                             O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0644);
+#endif
                 if (fd >= 0) { final_name = candidate; break; }
                 if (errno != EEXIST) {
                     error = "cannot write to " + dir + candidate + ": " + std::strerror(errno);
@@ -1458,7 +1531,11 @@ Value call_method(NativeCtx& ctx, Value& recv, const std::string& name,
             std::string_view bytes = (*ctx.parts)[i].body;
             size_t written = 0;
             while (written < bytes.size()) {
+#ifdef _WIN32
+                long n = _write(fd, bytes.data() + written, static_cast<unsigned>(std::min<size_t>(bytes.size() - written, 1u << 30)));
+#else
                 ssize_t n = ::write(fd, bytes.data() + written, bytes.size() - written);
+#endif
                 if (n < 0) {
                     if (errno == EINTR) continue;
                     ::close(fd);
@@ -1530,6 +1607,7 @@ Value call_method(NativeCtx& ctx, Value& recv, const std::string& name,
 // If a method is added above it has to be added here: they are the same list
 // seen from both sides.
 const std::vector<BuiltinMethod>* methods_of(const std::string& type) {
+    if (t_browser) return browser::methods(type);
     // The three response modifiers chain onto ANY value —`return
     // {...}.status(201)`— so they appear in every list.
     static const std::vector<BuiltinMethod> kComunes = {
@@ -1633,6 +1711,11 @@ const std::array<MemberMap, 39> kMembers = {{
 // " db" (not a valid identifier, so no script can name it) stands for every
 // database module: sqlite/postgres/mysql expose the same six operations.
 int member_native_id(const std::string& object, const std::string& member) {
+    if (t_browser) {
+        for (const auto& m : browser::kMembers)
+            if (object == m.object && member == m.member) return browser::id(m.native);
+        return -1;
+    }
     const std::string obj = is_db_module(object) ? " db" : object;
     for (const auto& m : kMembers)
         if (obj == m.object && member == m.member) return native_id(m.native);
@@ -1640,12 +1723,17 @@ int member_native_id(const std::string& object, const std::string& member) {
 }
 
 bool is_reserved_object(const std::string& name) {
+    if (t_browser) {
+        for (const auto& m : browser::kMembers) if (name == m.object) return true;
+        return false;
+    }
     if (is_db_module(name)) return true;
     for (const auto& m : kMembers) if (name == m.object) return true;
     return false;
 }
 
 bool is_db_module(const std::string& name) {
+    if (t_browser) return false;
     return name == "sqlite" || name == "postgres" || name == "mysql";
 }
 

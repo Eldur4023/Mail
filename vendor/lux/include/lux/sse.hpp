@@ -2,7 +2,7 @@
 #include <string>
 #include <string_view>
 #include <memory>
-#include <unistd.h>
+#include <lux/platform.hpp>
 #include <cerrno>
 #include "cancel.hpp"
 #include "request.hpp"
@@ -78,7 +78,7 @@ public:
     // partial write has left the byte stream desynced (see raw_write()) —
     // from the app's perspective this is indistinguishable from the
     // connection being gone, since nothing more can be safely sent on it.
-    bool is_open() const { return token_ && !token_->is_cancelled() && !desynced_; }
+    bool is_open() const { return token_ && !token_->is_cancelled() && !desynced_ && !shutting_down().load(std::memory_order_acquire); }
 
 private:
     std::function<ssize_t(const char*, size_t)> writer_;

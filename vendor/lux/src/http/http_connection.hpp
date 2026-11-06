@@ -2,7 +2,7 @@
 #include <string>
 #include <memory>
 #include <atomic>
-#include <sys/epoll.h>
+#include <lux/platform.hpp>
 #include <chrono>
 #include <cstdint>
 #include "http_parser.hpp"
@@ -15,15 +15,31 @@ struct bio_st;
 
 namespace lux::http {
 
+// The textual IP of a socket address, "" for a family other than IPv4/IPv6.
+inline std::string peer_ip_of(const sockaddr_storage& ss) {
+    char buf[INET6_ADDRSTRLEN]{};
+    if (ss.ss_family == AF_INET)
+        inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in*>(&ss)->sin_addr, buf, sizeof buf);
+    else if (ss.ss_family == AF_INET6)
+        inet_ntop(AF_INET6, &reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_addr, buf, sizeof buf);
+    return buf;
+}
+
 class HttpConnection : public std::enable_shared_from_this<HttpConnection> {
 public:
     HttpConnection(int fd, core::EventLoop& loop, lux::DispatchFn dispatch,
                    std::shared_ptr<std::atomic<int>> conn_count = nullptr,
-                   std::shared_ptr<std::atomic<int>> loop_count = nullptr);
+                   std::shared_ptr<std::atomic<int>> loop_count = nullptr,
+                   std::string peer_ip = {});   // from accept(): saves the getpeername(2) on the first request
     ~HttpConnection();
 
     void start();
     void on_event(uint32_t events);
+
+    // Orderly shutdown (the drain in App::run): a connection with no request in progress
+    // closes now, instead of waiting for the client or for the idle timeout (60 s); one with a
+    // request in progress finishes it and then closes (keep-alive off). ONLY from its loop's thread.
+    void begin_shutdown();
 
 private:
     int                fd_;
@@ -34,6 +50,7 @@ private:
     std::shared_ptr<lux::CancellationToken> cancel_token_; // one per request
     HttpParser         parser_;
     bool               closed_         = false;
+    bool               draining_       = false;   // begin_shutdown() was called: no more keep-alive
     // What epoll is watching: re-arming the same thing after every response
     // was an epoll_ctl per request for nothing.
     // HTTPS (LUX_TLS, lux::tls::init): every socket I/O goes through io_read()/

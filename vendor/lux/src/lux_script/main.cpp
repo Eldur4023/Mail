@@ -1,11 +1,22 @@
 // The Lux binary: it reads .lux files and serves.
+#include <lux_script/luxp_serve.hpp>
 #include "../http/http_parser.hpp"
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <malloc.h>
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <io.h>
+#  include <fcntl.h>
+#  include <shellapi.h>   // CommandLineToArgvW (link: shell32)
+#  include <csignal>
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <signal.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#  include <malloc.h>
+#endif
+#include <lux_script/platform_os.hpp>
 #include <lux_script/schedule.hpp>
 #include <lux_script/project.hpp>
 #include <lux_script/vm.hpp>
@@ -22,10 +33,19 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <thread>
 
 namespace fs = std::filesystem;
+
+#ifdef LUX_EMBEDDED
+// Hooks of the embedding shell (Lux-Local's Android boot): `vet` sees the app's declaration once compiled and
+// returns an error text to refuse it (so the shell need not compile the app a second time); `listening` fires on
+// the main loop as soon as the server accepts connections (so the shell need not poll the port).
+std::function<std::string(const lux_script::AppDecl&)> lux_embedded_vet;
+std::function<void()>                                  lux_embedded_listening;
+#endif
 
 namespace {
 
@@ -93,6 +113,13 @@ void usage() {
         "\n"
         "  Runs the `command \"name\":` block (after the `on start:` blocks)\n"
         "  once, as a script: os.argv(), os.input(), os.exit(code)\n"
+        "\n"
+        "       lux pack <page.html> <out.luxp>\n"
+        "\n"
+        "  Compiles a static HTML+CSS+LuxScript site (the page, every local\n"
+        "  page it links to, their stylesheets and images) into one .luxp for\n"
+        "  Luxium.  render() answers .luxp by itself to a client that sends\n"
+        "  Accept: application/x-luxp\n"
         "\n"
         "       lux test <files|directory> [-- name-filter]\n"
         "\n"
@@ -332,7 +359,11 @@ static void run_tests(const lux_script::Module& m, lux::DispatchFn dispatch, std
               << (failed ? " tests\n" : " tests passed\n");
     std::cout.flush();
     g_test_rc = failed ? 1 : 0;
+#ifdef _WIN32
+    std::raise(SIGTERM);   // graceful shutdown of the server (the handler app.run() installed)...
+#else
     ::kill(::getpid(), SIGTERM);   // graceful shutdown of the server...
+#endif
     // ...but the tests' own http client may hold a keep-alive connection to it, which the
     // drain would wait 30 s for: a moment's grace, then out with the result.
     std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -347,6 +378,30 @@ int lux_main(int argc, char** argv) {
 #else
 int main(int argc, char** argv) {
 #endif
+#ifdef _WIN32
+#ifndef LUX_EMBEDDED   // the embedding shell owns its argv and its console
+    // LuxScript strings are UTF-8: take the arguments from the wide command line, put the
+    // console in UTF-8 and keep stdio byte-exact ("\n" stays "\n", as on Linux).
+    std::vector<std::string> utf8_argv;
+    std::vector<char*>       utf8_ptrs;
+    {
+        int n = 0;
+        if (LPWSTR* w = CommandLineToArgvW(GetCommandLineW(), &n)) {
+            for (int i = 0; i < n; ++i) utf8_argv.push_back(lux_script::plat::narrow(w[i]));
+            LocalFree(w);
+            for (auto& a : utf8_argv) utf8_ptrs.push_back(a.data());
+            utf8_ptrs.push_back(nullptr);
+            argc = n;
+            argv = utf8_ptrs.data();
+        }
+    }
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    _setmode(_fileno(stdin),  _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
+#else
     // glibc mmaps every allocation past 128 KB and unmaps it when freed: a
     // file read into a string or a big response paid a fresh zeroed mapping
     // per request, and each unmap interrupted every other thread (a TLB
@@ -357,8 +412,23 @@ int main(int argc, char** argv) {
     mallopt(M_MMAP_THRESHOLD, 1 << 20);
     mallopt(M_TRIM_THRESHOLD, 8 << 20);
 #endif
+#endif   // _WIN32
     if (argc >= 2 && std::string(argv[1]) == "restore")
         return lux_script::restore_main({argv + 2, argv + argc});
+
+    // lux pack page.html out.luxp: a static HTML+CSS+LuxScript site compiled
+    // into one .luxp (Luxium's format; luxp_serve.hpp).
+    if (argc >= 2 && std::string(argv[1]) == "pack") {
+        if (argc != 4) {
+            std::fprintf(stderr, "usage: lux pack <page.html> <out.luxp>\n");
+            return 2;
+        }
+        std::string report;
+        const bool ok = lux_script::pack_site(argv[2], argv[3], &report);
+        std::fputs(report.c_str(), ok ? stdout : stderr);
+        if (!ok) std::fputs("\n", stderr);
+        return ok ? 0 : 1;
+    }
 
     std::vector<std::string> args;
     const bool run_mode  = argc >= 2 && std::string(argv[1]) == "run";
@@ -380,7 +450,13 @@ int main(int argc, char** argv) {
         else if (a == "--json")     { check_only = true; json_output = true; }
         else if (a == "--no-watch") watch = false;
         else if (a == "--verbose")  verbose = true;
-        else if (a == "--native")   { native = true; watch = false; }
+        else if (a == "--native") {
+#if defined(_WIN32) || defined(LUX_NO_NATIVE)
+            std::cerr << "lux: native compilation is not available on Windows yet; running on the bytecode VM\n";
+#else
+            native = true; watch = false;
+#endif
+        }
         else if (a == "--autotest")     g_autotest.enabled = true;
         else if (a == "--autotest=all") { g_autotest.enabled = true; g_autotest.unsafe = true; }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
@@ -471,6 +547,10 @@ int main(int argc, char** argv) {
     publish_module(mod);
 
     const lux_script::AppDecl& cfg = mod->program.app;
+#ifdef LUX_EMBEDDED
+    if (lux_embedded_vet)
+        if (std::string why = lux_embedded_vet(cfg); !why.empty()) { std::cerr << "lux: " << why << "\n"; return 1; }
+#endif
     const lux_script::TlsDecl& tls = mod->program.tls;
     lux::App app;
     // One line per request, with its flush, costs close to 25% of the
@@ -480,9 +560,9 @@ int main(int argc, char** argv) {
         lux::LoggerOptions lo;
         lo.file = !cfg.log.file.empty();
         if (lo.file) {
-            const std::filesystem::path p(cfg.log.file);
-            lo.dir      = p.has_parent_path() ? p.parent_path().string() : ".";
-            lo.filename = p.filename().string();
+            const std::filesystem::path p = lux_script::plat::to_path(cfg.log.file);
+            lo.dir      = p.has_parent_path() ? lux_script::plat::from_path(p.parent_path()) : ".";
+            lo.filename = lux_script::plat::from_path(p.filename());
         }
         lo.max_file_size = cfg.log.max_size;
         lo.max_files     = cfg.log.keep;
@@ -552,14 +632,27 @@ int main(int argc, char** argv) {
     if (test_mode) {
         // Its own port, so a running instance of the app does not get in the way.
         if (!port_override) {
+#ifdef _WIN32
+            WSADATA wsa;
+            WSAStartup(MAKEWORD(2, 2), &wsa);   // reference-counted: the server's own init is unaffected
+            const SOCKET s = ::socket(AF_INET, SOCK_STREAM, 0);
+            const bool s_ok = s != INVALID_SOCKET;
+            int len = sizeof(sockaddr_in);
+#else
             const int s = ::socket(AF_INET, SOCK_STREAM, 0);
+            const bool s_ok = s >= 0;
+            socklen_t len = sizeof(sockaddr_in);
+#endif
             sockaddr_in a{};
             a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            socklen_t len = sizeof a;
-            if (s >= 0 && ::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0 &&
+            if (s_ok && ::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0 &&
                 ::getsockname(s, reinterpret_cast<sockaddr*>(&a), &len) == 0)
                 port_override = ntohs(a.sin_port);
-            if (s >= 0) ::close(s);
+#ifdef _WIN32
+            if (s_ok) ::closesocket(s);
+#else
+            if (s_ok) ::close(s);
+#endif
         }
         lux_script::script_mode().base_url = "http://127.0.0.1:" + std::to_string(port_override ? port_override : cfg.port);
     }
@@ -598,6 +691,10 @@ int main(int argc, char** argv) {
             std::thread(run_tests, std::cref(*mod), lux::DispatchFn(dispatch), filter).detach();
         };
     }
+#ifdef LUX_EMBEDDED
+    if (lux_embedded_listening)
+        boot = [inner = std::move(boot)](lux::core::EventLoop& loop) { if (inner) inner(loop); lux_embedded_listening(); };
+#endif
     if (boot) app.on_start(boot);
 
     // See App::set_route_probe's comment: router_ only ever holds the two
